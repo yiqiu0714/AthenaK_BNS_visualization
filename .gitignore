@@ -1,0 +1,29 @@
+# --- Local machine-specific config (copy config.example.ini -> config.ini) ---
+config.ini
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# --- Generated output ---
+Figs/
+output/
+*.png
+*.pdf
+*.mp4
+*.gif
+all_movies/
+
+# --- Core dumps / large binaries that should never be committed ---
+core.*
+*.core
+
+# --- External repos that live here but are NOT part of this repo ---
+# LargeSim is a separate project (github.com/computationalrelativity/LargeSim);
+# move it elsewhere or keep it ignored here.
+LargeSim/
+# example_perlmutter holds older NERSC/Perlmutter script variants (kept for
+# reference on disk, intentionally excluded from this repo).
+example_perlmutter/

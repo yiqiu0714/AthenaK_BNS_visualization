@@ -1,0 +1,7 @@
+# Python dependencies for the top-level visualization scripts.
+# (The bundled plot-tools/athplot submodule declares its own, fuller set of
+#  dependencies in plot-tools/pyproject.toml — including vtk and PyCompOSE.
+#  Install those with:  pip install -e plot-tools )
+numpy>=1.13
+scipy>=1.10
+matplotlib>=2.2

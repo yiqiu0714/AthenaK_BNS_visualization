@@ -1,0 +1,336 @@
+"""
+Unit conversions for AthenaK BNS simulation outputs.
+
+Modeled after scidata.units: explicit scale-factor constants, conv_* functions
+for each physical quantity, and a plot_params() helper that returns
+(scale, label, use_log, vmin, vmax) ready for use with BNS.py's render_frames.
+
+AthenaK BNS uses GeometricKilometer code units (G=c=1, length unit = 1 km)
+for geometry and radiation fields, with nuclear conventions for baryon/radiation
+number densities (stored in fm^-3).  Hydro rest-mass density uses the standard
+Cactus geometric convention (G=c=M_sun=1), which gives a slightly different
+length unit (~1.477 km) but the same consistent density scale.
+
+Supported unit systems
+----------------------
+'code'  : native AthenaK code units (default for all vars except density, which
+          is currently plotted in CGS by BNS.py for historical reasons)
+'cgs'   : Gaussian CGS (g, cm, s, erg)
+'ngs'   : NGS = bns_nurates units (nm, g, s, MeV energy)
+
+Conversion reference
+--------------------
+Opacity  κ       : code km^-1       →  NGS nm^-1       ÷ 1e12
+                                    →  CGS cm^-1        ÷ 1e5
+Rad. energy dens : code km^-2       →  NGS MeV/nm^3     × GK2NGS_ENEDENS
+                                    →  CGS erg/cm^3      × CODE2CGS_ENEDENS
+Rad. number dens : code fm^-3       →  NGS nm^-3        × 1e18
+                                    →  CGS cm^-3        × 1e39
+Number emiss. η₀ : code             →  NGS nm^-3 s^-1   × UNIT_ND_DOT
+                                    →  CGS cm^-3 s^-1   × CODE2CGS_ND_DOT
+Energy emiss. η₁ : code             →  NGS MeV nm^-3 s^-1 × UNIT_ED_DOT
+                                    →  CGS erg cm^-3 s^-1  × CODE2CGS_ED_DOT
+Rest-mass density: code (G=c=Msun=1)→  CGS g/cm^3       × CODE2CGS_DENS ≈ 6.178e17
+Avg. ν energy E/N: code km^-2/fm^-3 →  MeV               × CODE2MEV_AVGENE
+"""
+
+from matplotlib.colors import LogNorm, Normalize
+
+# ---------------------------------------------------------------------------
+# Physical constants (CGS, matching AthenaK unit_system.cpp)
+# ---------------------------------------------------------------------------
+c    = 2.99792458e10     # speed of light          [cm/s]
+G    = 6.67408e-8        # gravitational constant   [cm^3 g^-1 s^-2]
+MeV  = 1.6021766208e-6   # 1 MeV in erg
+Msun = 1.98892e33        # solar mass               [g]
+
+# ---------------------------------------------------------------------------
+# GeometricKilometer (GK) unit scales  — G=c=1, length unit = 1 km
+# ---------------------------------------------------------------------------
+_GK_press  = G / c**4 * 1e10    # 1 erg/cm^3  expressed in km^-2
+_GK_volume = 1e-15               # 1 cm^3      expressed in km^3
+_GK_energy = G / c**4 * 1e-5    # 1 erg       expressed in km
+
+# NGS (nm, g, s, MeV energy)
+_NGS_volume = 1e21               # 1 cm^3  in nm^3   (1 cm = 1e7 nm)
+_NGS_numden = 1e-21              # 1 cm^-3 in nm^-3
+
+# Nuclear (fm, MeV)
+_NUC_volume = 1e39               # 1 cm^3  in fm^3   (1 cm = 1e13 fm)
+
+# ---------------------------------------------------------------------------
+# Derived conversion constants
+# ---------------------------------------------------------------------------
+
+# Energy density: code (km^-2) → MeV/nm^3
+GK2NGS_ENEDENS    = (_GK_volume / _NGS_volume) * (1.0/MeV / _GK_energy)
+
+# Energy density: code (km^-2) → erg/cm^3
+CODE2CGS_ENEDENS  = 1.0 / _GK_press
+
+# Radiation number density: code (fm^-3) → nm^-3
+CODE2NGS_NUMDENS  = 1e18         # 1 fm^-3 = 1e18 nm^-3
+
+# Radiation number density: code (fm^-3) → cm^-3
+CODE2CGS_NUMDENS  = 1e39         # 1 fm^-3 = 1e39 cm^-3
+
+# Opacity: code (km^-1) → nm^-1
+CODE2NGS_OPACITY  = 1e-12        # 1 km^-1 = 1e-12 nm^-1
+
+# Opacity: code (km^-1) → cm^-1
+CODE2CGS_OPACITY  = 1e-5         # 1 km^-1 = 1e-5  cm^-1
+
+# Number emissivity η₀: code → nm^-3 s^-1
+_c_km       = c * 1e-5           # c in km/s  ≈ 2.998e5 km/s
+UNIT_ND_DOT = CODE2NGS_NUMDENS * _c_km   # ≈ 2.998e23
+
+# Number emissivity η₀: code → cm^-3 s^-1
+CODE2CGS_ND_DOT   = UNIT_ND_DOT * _NGS_numden   # ÷ 1e21
+
+# Energy emissivity η₁: code → MeV nm^-3 s^-1
+UNIT_ED_DOT       = GK2NGS_ENEDENS * _c_km       # ≈ 2.265e29
+
+# Energy emissivity η₁: code → erg cm^-3 s^-1
+CODE2CGS_ED_DOT   = UNIT_ED_DOT * MeV * _NGS_numden
+
+# Rest-mass density: code (G=c=M_sun=1) → g/cm^3
+# Uses the Cactus length unit G*Msun/c^2 ≈ 1.477 km, consistent with
+# the scale_factor=6.178e17 already in BNS.py.
+_unit_len_cgs     = G * Msun / c**2            # ≈ 1.477e6 cm
+CODE2CGS_DENS     = Msun / _unit_len_cgs**3    # ≈ 6.178e17
+
+# Average neutrino energy E/N: code ratio (km^-2)/(fm^-3) → MeV
+CODE2MEV_AVGENE   = GK2NGS_ENEDENS / CODE2NGS_NUMDENS  # ≈ 7.556e5
+
+# ---------------------------------------------------------------------------
+# Explicit conversion functions  (mirror scidata.units.conv_*)
+# ---------------------------------------------------------------------------
+
+def conv_dens(val, units='cgs'):
+    """Rest-mass density (code G=c=Msun=1 units) → target units."""
+    if units == 'code': return val
+    if units == 'cgs':  return val * CODE2CGS_DENS
+    raise ValueError(f"density: unsupported units {units!r} (use 'code' or 'cgs')")
+
+
+def conv_enedens(val, units='cgs'):
+    """Radiation energy density E (code km^-2) → target units."""
+    if units == 'code': return val
+    if units == 'ngs':  return val * GK2NGS_ENEDENS
+    if units == 'cgs':  return val * CODE2CGS_ENEDENS
+    raise ValueError(f"enedens: unsupported units {units!r}")
+
+
+def conv_numdens(val, units='cgs'):
+    """Radiation/baryon number density N (code fm^-3) → target units."""
+    if units == 'code': return val
+    if units == 'ngs':  return val * CODE2NGS_NUMDENS
+    if units == 'cgs':  return val * CODE2CGS_NUMDENS
+    raise ValueError(f"numdens: unsupported units {units!r}")
+
+
+def conv_opacity(val, units='cgs'):
+    """Absorption/scattering opacity κ (code km^-1) → target units."""
+    if units == 'code': return val
+    if units == 'ngs':  return val * CODE2NGS_OPACITY
+    if units == 'cgs':  return val * CODE2CGS_OPACITY
+    raise ValueError(f"opacity: unsupported units {units!r}")
+
+
+def conv_emissivity_N(val, units='cgs'):
+    """Number emissivity η₀ (code) → target units."""
+    if units == 'code': return val
+    if units == 'ngs':  return val * UNIT_ND_DOT
+    if units == 'cgs':  return val * CODE2CGS_ND_DOT
+    raise ValueError(f"emissivity_N: unsupported units {units!r}")
+
+
+def conv_emissivity_E(val, units='cgs'):
+    """Energy emissivity η₁ (code) → target units."""
+    if units == 'code': return val
+    if units == 'ngs':  return val * UNIT_ED_DOT
+    if units == 'cgs':  return val * CODE2CGS_ED_DOT
+    raise ValueError(f"emissivity_E: unsupported units {units!r}")
+
+
+def conv_avg_energy(val, units='MeV'):
+    """Average neutrino energy E/N (code) → target units."""
+    if units == 'code': return val
+    if units in ('ngs', 'MeV'): return val * CODE2MEV_AVGENE
+    if units == 'cgs':          return val * CODE2MEV_AVGENE * MeV
+    raise ValueError(f"avg_energy: unsupported units {units!r}")
+
+
+# ---------------------------------------------------------------------------
+# Per-variable render parameters
+# ---------------------------------------------------------------------------
+# Original BNS.py hardcoded defaults (for reference / regression checks)
+# These are the exact values that were in BNS.py before unit-system support
+# was added.  Preserved here so future comparisons can verify nothing drifted.
+#
+#   var          scale_factor  norm                  label
+#   dens         6.178e17      LogNorm(6e8, 2e15)    r"$\rho~[\mathrm{g\,cm^{-3}}]$"
+#   temperature  1.0           vmin=0, vmax=70       r"$T~[\mathrm{MeV}]$"
+#   s_00         1.0           vmin=0, vmax=0.5      r"$Y_e$"
+#   E:0          1.0           LogNorm(1e-11, 1e-8)  "E:0"
+#   N:0          1.0           LogNorm(1e-10, 1e-2)  "N:0"
+#   abs_0:0      1.0           LogNorm(1e-18, 1e-9)  r"$\kappa_{\mathrm{abs},0}$"
+#   abs_1:0      1.0           LogNorm(1e-18, 1e-9)  r"$\kappa_\mathrm{abs}$"
+#   eta_0:0      1.0           LogNorm(1e-10, 1e-4)  r"$\eta_{0,0}$"
+#   eta_1:0      1.0           LogNorm(1e-10, 1e-4)  r"$\eta_{1,0}$"
+#   con_H        1.0           LogNorm(1e-9,  1e-4)  r"$|\mathcal{H}|$"
+#   avg_energy   1.0           LogNorm(1e-4,  1e-3)  "Average energy (code units)"
+#
+# Code-unit (vmin, vmax) defaults for each variable.  The values for
+# 'dens' are back-computed from the existing BNS.py defaults (scale 6.178e17,
+# CGS range 6e8–2e15).  Radiation code ranges match the LogNorms above.
+_CODE_VMIN = {
+    'dens':      6e8    / CODE2CGS_DENS,   # ≈ 9.7e-10
+    'E:0':       1e-11,
+    'N:0':       1e-7,
+    'N:2':       1e-7,
+    'abs_0:0':   1e-18,
+    'abs_1:0':   1e-18,
+    'eta_0:0':   1e-10,
+    'eta_1:0':   1e-10,
+    'con_H':     1e-9,
+    'avg_energy':1e-4,
+    'nu_energy': 30.0 / CODE2MEV_AVGENE,
+}
+_CODE_VMAX = {
+    'dens':      2e15   / CODE2CGS_DENS,   # ≈ 3.2e-3
+    'E:0':       1e-8,
+    'N:0':       1e-3,
+    'N:2':       1e-3,
+    'abs_0:0':   1e-9,
+    'abs_1:0':   1e-9,
+    'eta_0:0':   1e-4,
+    'eta_1:0':   1e-4,
+    'con_H':     1e-4,
+    'avg_energy':1e-3,
+    'nu_energy': 150.0 / CODE2MEV_AVGENE,
+}
+
+# Scale factors: (var, units) → multiplicative factor applied to code values
+_SCALES = {
+    # rest-mass density
+    ('dens',     'cgs'): CODE2CGS_DENS,
+    # radiation energy density
+    ('E:0',      'ngs'): GK2NGS_ENEDENS,
+    ('E:0',      'cgs'): CODE2CGS_ENEDENS,
+    # radiation number density
+    ('N:0',      'ngs'): CODE2NGS_NUMDENS,
+    ('N:0',      'cgs'): CODE2CGS_NUMDENS,
+    ('N:2',      'ngs'): CODE2NGS_NUMDENS,
+    ('N:2',      'cgs'): CODE2CGS_NUMDENS,
+    # absorption opacities
+    ('abs_0:0',  'ngs'): CODE2NGS_OPACITY,
+    ('abs_0:0',  'cgs'): CODE2CGS_OPACITY,
+    ('abs_1:0',  'ngs'): CODE2NGS_OPACITY,
+    ('abs_1:0',  'cgs'): CODE2CGS_OPACITY,
+    # number emissivity
+    ('eta_0:0',  'ngs'): UNIT_ND_DOT,
+    ('eta_0:0',  'cgs'): CODE2CGS_ND_DOT,
+    # energy emissivity
+    ('eta_1:0',  'ngs'): UNIT_ED_DOT,
+    ('eta_1:0',  'cgs'): CODE2CGS_ED_DOT,
+    # average neutrino energy (ngs and cgs both yield MeV)
+    ('avg_energy','ngs'): CODE2MEV_AVGENE,
+    ('avg_energy','cgs'): CODE2MEV_AVGENE,
+    ('nu_energy', 'ngs'): CODE2MEV_AVGENE,
+    ('nu_energy', 'cgs'): CODE2MEV_AVGENE,
+}
+
+# Axis / colorbar labels: (var, units) → LaTeX string
+_LABELS = {
+    # density
+    ('dens',     'code'): r"$\rho~[\mathrm{km}^{-2}]$",
+    ('dens',     'cgs' ): r"$\rho~[\mathrm{g\,cm^{-3}}]$",
+    # radiation energy density
+    ('E:0',      'code'): r"$E_\nu^{(0)}~[\mathrm{km}^{-2}]$",
+    ('E:0',      'ngs' ): r"$E_\nu^{(0)}~[\mathrm{MeV\,nm^{-3}}]$",
+    ('E:0',      'cgs' ): r"$E_\nu^{(0)}~[\mathrm{erg\,cm^{-3}}]$",
+    # radiation number density
+    ('N:0',      'code'): r"$N_\nu^{(0)}~[\mathrm{fm}^{-3}]$",
+    ('N:0',      'ngs' ): r"$N_\nu^{(0)}~[\mathrm{nm^{-3}}]$",
+    ('N:0',      'cgs' ): r"$N_\nu^{(0)}~[\mathrm{cm^{-3}}]$",
+    ('N:2',      'code'): r"$N_\nu^{(2)}~[\mathrm{fm}^{-3}]$",
+    ('N:2',      'ngs' ): r"$N_\nu^{(2)}~[\mathrm{nm^{-3}}]$",
+    ('N:2',      'cgs' ): r"$N_\nu^{(2)}~[\mathrm{cm^{-3}}]$",
+    # absorption opacities
+    ('abs_0:0',  'code'): r"$\kappa_{a,0}^{(0)}~[\mathrm{km}^{-1}]$",
+    ('abs_0:0',  'ngs' ): r"$\kappa_{a,0}^{(0)}~[\mathrm{nm}^{-1}]$",
+    ('abs_0:0',  'cgs' ): r"$\kappa_{a,0}^{(0)}~[\mathrm{cm}^{-1}]$",
+    ('abs_1:0',  'code'): r"$\kappa_{a,1}^{(0)}~[\mathrm{km}^{-1}]$",
+    ('abs_1:0',  'ngs' ): r"$\kappa_{a,1}^{(0)}~[\mathrm{nm}^{-1}]$",
+    ('abs_1:0',  'cgs' ): r"$\kappa_{a,1}^{(0)}~[\mathrm{cm}^{-1}]$",
+    # number emissivity
+    ('eta_0:0',  'code'): r"$\eta_0^{(0)}~[\mathrm{code}]$",
+    ('eta_0:0',  'ngs' ): r"$\eta_0^{(0)}~[\mathrm{nm^{-3}\,s^{-1}}]$",
+    ('eta_0:0',  'cgs' ): r"$\eta_0^{(0)}~[\mathrm{cm^{-3}\,s^{-1}}]$",
+    # energy emissivity
+    ('eta_1:0',  'code'): r"$\eta_1^{(0)}~[\mathrm{code}]$",
+    ('eta_1:0',  'ngs' ): r"$\eta_1^{(0)}~[\mathrm{MeV\,nm^{-3}\,s^{-1}}]$",
+    ('eta_1:0',  'cgs' ): r"$\eta_1^{(0)}~[\mathrm{erg\,cm^{-3}\,s^{-1}}]$",
+    # average energy (report in MeV for both ngs and cgs)
+    ('avg_energy','code'): r"$\langle\varepsilon_\nu\rangle~[\mathrm{km^{-2}/fm^{-3}}]$",
+    ('avg_energy','ngs' ): r"$\langle\varepsilon_\nu\rangle~[\mathrm{MeV}]$",
+    ('avg_energy','cgs' ): r"$\langle\varepsilon_\nu\rangle~[\mathrm{MeV}]$",
+    ('nu_energy', 'code'): r"$\langle\varepsilon_\nu\rangle~[\mathrm{km^{-2}/fm^{-3}}]$",
+    ('nu_energy', 'ngs' ): r"$\langle\varepsilon_\nu\rangle~[\mathrm{MeV}]$",
+    ('nu_energy', 'cgs' ): r"$\langle\varepsilon_\nu\rangle~[\mathrm{MeV}]$",
+    # dimensionless / already physical
+    ('temperature','code'): r"$T~[\mathrm{MeV}]$",
+    ('temperature','ngs' ): r"$T~[\mathrm{MeV}]$",
+    ('temperature','cgs' ): r"$T~[\mathrm{MeV}]$",
+    ('s_00',      'code'): r"$Y_e$",
+    ('s_00',      'ngs' ): r"$Y_e$",
+    ('s_00',      'cgs' ): r"$Y_e$",
+    ('con_H',     'code'): r"$|\mathcal{H}|$",
+    ('con_H',     'ngs' ): r"$|\mathcal{H}|$",
+    ('con_H',     'cgs' ): r"$|\mathcal{H}|$",
+}
+
+# Variables that use a linear (not log) colorscale
+_LINEAR_VARS = {'temperature', 's_00', 'nu_energy'}
+
+
+def plot_params(var, units='code'):
+    """Return render parameters for *var* in *units*.
+
+    Parameters
+    ----------
+    var   : str — variable name as used in BNS.py (e.g. 'dens', 'abs_1:0')
+    units : str — 'code', 'cgs', or 'ngs'
+
+    Returns
+    -------
+    scale : float      — multiply code values by this before plotting
+    label : str        — colorbar / axis label (LaTeX)
+    use_log : bool     — True → LogNorm, False → linear Normalize
+    vmin  : float      — suggested colorbar minimum (in target units)
+    vmax  : float      — suggested colorbar maximum (in target units)
+    """
+    scale   = _SCALES.get((var, units), 1.0)
+    label   = _LABELS.get((var, units), _LABELS.get((var, 'code'), var))
+    use_log = var not in _LINEAR_VARS
+
+    vmin_code = _CODE_VMIN.get(var)
+    vmax_code = _CODE_VMAX.get(var)
+    vmin = vmin_code * scale if vmin_code is not None else None
+    vmax = vmax_code * scale if vmax_code is not None else None
+
+    return scale, label, use_log, vmin, vmax
+
+
+def make_norm(var, units='code', vmin=None, vmax=None):
+    """Convenience: return a matplotlib Normalize or LogNorm for *var*.
+
+    Supplied *vmin*/*vmax* override the defaults from plot_params().
+    """
+    _, _, use_log, default_vmin, default_vmax = plot_params(var, units)
+    lo = vmin if vmin is not None else default_vmin
+    hi = vmax if vmax is not None else default_vmax
+    if use_log:
+        return LogNorm(vmin=lo, vmax=hi)
+    return Normalize(vmin=lo, vmax=hi)
