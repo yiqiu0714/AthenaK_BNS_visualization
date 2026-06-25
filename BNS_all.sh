@@ -102,9 +102,23 @@ SECTIONS=(
 
 # Load required modules on HPC systems. Comment out / replace with your own
 # environment activation (e.g. `conda activate myenv`) if not using `module`.
+#
+# Lmod's `module` is usually just a shell function defined for interactive/login
+# shells, so it is NOT available in a plain `bash BNS_all.sh` (non-interactive)
+# shell. Source Lmod's init script first so `module` works here too.
+if ! command -v module &>/dev/null; then
+    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
+                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh \
+                 /etc/profile.d/00-modulepath.sh; do
+        [[ -r "${_init}" ]] && source "${_init}" && break
+    done
+fi
 if command -v module &>/dev/null; then
     module load python py-matplotlib py-numpy py-scipy
     module load ffmpeg          # provides ffmpeg for make_movies.sh
+else
+    echo "WARNING: 'module' command not found; relying on the current environment."
+    echo "         Make sure python/matplotlib/numpy/scipy and ffmpeg are available."
 fi
 
 ARGS=(--simpath "${SIMPATH}")
