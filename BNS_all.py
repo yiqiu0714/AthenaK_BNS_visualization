@@ -517,6 +517,11 @@ def plot_run_speed_all(output_dirs, figpath):
 # Per-frame workers (module-level for multiprocessing pickling)
 # ---------------------------------------------------------------------------
 
+def _bmag_from_components(bx, by, bz):
+    """Flat (Euclidean) magnetic field magnitude |B| = sqrt(bx^2 + by^2 + bz^2)."""
+    return np.sqrt(bx * bx + by * by + bz * bz)
+
+
 def _render_frame_worker_all(kw):
     """Per-frame plot worker for combined multi-segment data."""
     global_idx      = kw['global_idx']
@@ -535,6 +540,7 @@ def _render_frame_worker_all(kw):
     show_trackers   = kw['show_trackers']
     trackers        = kw['trackers']
     use_abs         = kw.get('use_abs', False)
+    derived         = kw.get('derived', None)  # {'name', 'func', 'inputs'} or None
     coord_scale     = kw.get('coord_scale', 1.0)
     coord_label     = kw.get('coord_label', r"\mathrm{M}_\odot")
 
@@ -555,6 +561,14 @@ def _render_frame_worker_all(kw):
             data_xz = BinaryData(xz_fpath)
         except FileNotFoundError:
             pass
+
+    if derived is not None:
+        data_xy.register_derived_variable(derived['name'], derived['func'],
+                                          *derived['inputs'])
+        if data_xz is not None:
+            data_xz.register_derived_variable(derived['name'], derived['func'],
+                                              *derived['inputs'])
+        var_name = derived['name']
 
     if use_abs:
         abs_var = f"derived:abs_{var_name}"
@@ -637,11 +651,16 @@ def render_frames_all(output_dirs, figpath, file_prefix, var_name,
                       scale_factor=1.0,
                       skip_existing=False,
                       use_abs=False,
+                      derived=None,
                       coord_scale=1.0,
                       coord_label=r"\mathrm{M}_\odot"):
     """
     Render one PNG per deduplicated frame across all segments, in parallel.
     XZ prefix is auto-detected via '_xy' -> '_xz' substitution in file_prefix.
+
+    'derived', if given, is {'name', 'func', 'inputs'}: a derived variable
+    (name must start with 'derived:') registered per frame from the listed
+    input variables before plotting (e.g. |B| from bcc1/bcc2/bcc3).
     """
     xz_prefix = file_prefix.replace("_xy", "_xz") if "_xy" in file_prefix else None
     frames = collect_combined_frames(output_dirs, file_prefix, xz_prefix, step)
@@ -675,7 +694,7 @@ def render_frames_all(output_dirs, figpath, file_prefix, var_name,
              print_minmax=print_minmax,
              show_refinement=show_refinement,
              show_trackers=show_trackers, trackers=trackers,
-             use_abs=use_abs,
+             use_abs=use_abs, derived=derived,
              coord_scale=coord_scale, coord_label=coord_label)
         for global_idx, xy_fpath, xz_fpath in frames
     ]
@@ -926,6 +945,98 @@ def plot_s00_timeseries_all(output_dirs, figpath, file_prefix="bns.prim_xy"):
     print(f"  Saved bns_avg_s00_timeseries.png ({len(times)} frames)")
 
 
+def _compute_bmax_worker_fpath(fpath):
+    """Worker: load one 3D frame and return (time, bmax, x, y, z) in code units.
+
+    Scans every block for the global maximum |B| = sqrt(bcc1^2+bcc2^2+bcc3^2)
+    and records the cell-center coordinates where that maximum occurs.
+    """
+    try:
+        data = BinaryData(fpath)
+    except FileNotFoundError:
+        print(f"  Missing {fpath}, skipping")
+        return None
+
+    best_b = -np.inf
+    best_xyz = (np.nan, np.nan, np.nan)
+    for block, (bx, by, bz) in data.get_block_data(("bcc1", "bcc2", "bcc3")):
+        bmag = _bmag_from_components(bx, by, bz)
+        idx = np.unravel_index(int(np.argmax(bmag)), bmag.shape)  # (kz, ky, kx)
+        bval = float(bmag[idx])
+        if bval > best_b:
+            best_b = bval
+            coords = block.get_coords()
+            if len(coords) == 3:
+                xc, yc, zc = coords
+                kz, ky, kx = idx
+                best_xyz = (float(xc[kx]), float(yc[ky]), float(zc[kz]))
+            else:
+                best_xyz = (np.nan, np.nan, np.nan)
+
+    if not np.isfinite(best_b):
+        return None
+    return (data.time, best_b, best_xyz[0], best_xyz[1], best_xyz[2])
+
+
+def plot_bmax_timeseries_all(output_dirs, figpath, units='cgs',
+                             file_prefix="bns.prim3D"):
+    """Track the global maximum |B| and its location vs time across all segments.
+
+    Reads the 3-D primitive files (which carry bcc1/bcc2/bcc3), finds the global
+    max |B| per frame and the cell where it occurs, writes bns_bmax_vs_time.dat,
+    and saves a Bmax(t) plot.  Honors --units: 'code' keeps M_sun/code units,
+    'cgs'/'ngs' report t [ms], |B| [G], x/y/z [km].
+    """
+    time_to_fpath = _collect_frames_by_time(output_dirs, file_prefix)
+    if not time_to_fpath:
+        print(f"  No files found for prefix '{file_prefix}' across segments")
+        return
+
+    sorted_fpaths = [time_to_fpath[t] for t in sorted(time_to_fpath.keys())]
+
+    n_workers = min(multiprocessing.cpu_count(), len(sorted_fpaths))
+    with multiprocessing.Pool(n_workers) as pool:
+        results = pool.map(_compute_bmax_worker_fpath, sorted_fpaths)
+
+    results = sorted((r for r in results if r is not None), key=lambda x: x[0])
+    if not results:
+        print("  No B-field data found")
+        return
+
+    t = np.array([r[0] for r in results])
+    b = np.array([r[1] for r in results])
+    x = np.array([r[2] for r in results])
+    y = np.array([r[3] for r in results])
+    z = np.array([r[4] for r in results])
+
+    # Unit conversions (spatial axes follow the same code/km convention as slices)
+    t_out = au.conv_time(t, units)
+    b_out = au.conv_bfield(b, units)
+    coord_scale, _ = spatial_units(units)
+    x_out, y_out, z_out = x * coord_scale, y * coord_scale, z * coord_scale
+
+    is_code = (units == "code")
+    t_unit  = "Msun" if is_code else "ms"
+    b_unit  = "code" if is_code else "G"
+    xyz_unit = "Msun" if is_code else "km"
+
+    dat_path = os.path.join(figpath, "bns_bmax_vs_time.dat")
+    header = (f"t [{t_unit}]    Bmax [{b_unit}]    "
+              f"x [{xyz_unit}]    y [{xyz_unit}]    z [{xyz_unit}]")
+    np.savetxt(dat_path, np.column_stack([t_out, b_out, x_out, y_out, z_out]),
+               header=header)
+    print(f"  Saved bns_bmax_vs_time.dat ({len(t)} frames)")
+
+    fig, ax = plt.subplots(figsize=FIGSIZE, constrained_layout=True)
+    ax.plot(t_out, b_out)
+    ax.set_xlabel(f"t ({t_unit})")
+    ax.set_ylabel(rf"$|B|_\mathrm{{max}}$ ({b_unit})")
+    ax.set_yscale("log")
+    fig.savefig(os.path.join(figpath, "bns_bmax.png"), dpi=150)
+    plt.close(fig)
+    print("  Saved bns_bmax.png")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -949,6 +1060,7 @@ def parse_args():
                         choices=[
                             "history", "rho_max", "trackers", "run_speed",
                             "density", "temperature", "s00", "s00_avg",
+                            "bnorm", "bmax",
                             "rad_E", "rad_N", "rad_N2", "rad_abs", "rad_abs0",
                             "rad_eta0", "rad_eta1", "avg_energy",
                             "nu_energy", "nu_energy1", "nu_energy2",
@@ -1069,6 +1181,29 @@ def main():
                           show_trackers=show_trackers, show_refinement=True,
                           trackers=trackers, skip_existing=skip_existing,
                           coord_scale=coord_scale, coord_label=coord_label)
+
+    if enabled("bnorm"):
+        print("[bnorm] Rendering magnetic field magnitude |B| frames...")
+        _sc, _lb, _log, _lo, _hi = au.plot_params('bmag', units)
+        render_frames_all(output_dirs, figpath,
+                          file_prefix="bns.prim_xy", var_name="derived:bmag",
+                          cmap="plasma",
+                          norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
+                          label=_lb, out_prefix="bns_frame_bmag",
+                          xlim=XY_LIM, ylim=XY_LIM,
+                          print_minmax=True,
+                          show_trackers=show_trackers, show_refinement=True,
+                          trackers=trackers, scale_factor=_sc,
+                          skip_existing=skip_existing,
+                          derived=dict(name="derived:bmag",
+                                       func=_bmag_from_components,
+                                       inputs=("bcc1", "bcc2", "bcc3")),
+                          coord_scale=coord_scale, coord_label=coord_label)
+
+    if enabled("bmax"):
+        print("[bmax] Computing global max |B| time series...")
+        plot_bmax_timeseries_all(output_dirs, figpath, units=units,
+                                 file_prefix="bns.prim3D")
 
     if enabled("rad_E"):
         print("[rad_E] Rendering radiation energy E:0 frames...")

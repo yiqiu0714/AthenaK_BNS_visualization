@@ -1,0 +1,347 @@
+"""
+Opacity / radiation slice COMPARISON between two AthenaK runs.
+
+For each selected variable and each matched output time, renders a 3-panel
+figure:  [run A]  [run B]  [ratio A/B] , on the xz slice.  The run panels use
+the same colormap/norm/units as BNS_all.py (via athenak_units.plot_params);
+the ratio panel is a diverging log map centered on 1, so you can see at a glance
+*where* and *by how much* the two runs' opacities differ.
+
+The two runs' AMR grids may differ, so each is rasterized onto a common uniform
+grid (nearest-cell) before the ratio is taken.
+
+Conventions mirror BNS_all.py (xz slice, M_sun or km axes, AMR-aware) and the
+two-folder comparison style of sph_data_analysis/run_comparison.sh.
+
+Example
+-------
+python BNS_compare.py \
+    --run /lus/.../VVLR_test_2 --label "eq" \
+    --run /lus/.../VVLR_test_3 --label "non-eq" \
+    --vars eta_1:2 abs_1:2 eta_0:2 eta_1:0 \
+    --units cgs --outdir /lus/.../VVLR_test_2/compare_opacity
+"""
+
+import argparse
+import glob
+import os
+import sys
+
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm, Normalize, SymLogNorm
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.environ.get("ATHPLOT_PATH", os.path.join(_HERE, "plot-tools")))
+sys.path.append(_HERE)
+from athplot.load_ath_bin import BinaryData   # noqa: E402
+import athenak_units as au                      # noqa: E402
+
+# variable shorthand -> per-plane (new dump prefix, old prefix)
+# NB: the "old" fallback (rad_m1_*) is the SPHERICAL-surface dump, not a slice,
+# so it is only a valid fallback for xz-era runs.  For xy we require a genuine
+# *_xy slice dump (no spherical fallback), else the plane silently reports none.
+VAR_PREFIX = {
+    'eta_0': {'xz': ("bns.eta_0_xz", "bns.rad_m1_eta_0"),
+              'xy': ("bns.eta_0_xy", "bns.eta_0_xy")},
+    'eta_1': {'xz': ("bns.eta_1_xz", "bns.rad_m1_eta_1"),
+              'xy': ("bns.eta_1_xy", "bns.eta_1_xy")},
+    'abs_0': {'xz': ("bns.abs_0_xz", "bns.rad_m1_abs_0"),
+              'xy': ("bns.abs_0_xy", "bns.abs_0_xy")},
+    'abs_1': {'xz': ("bns.abs_1_xz", "bns.rad_m1_abs_1"),
+              'xy': ("bns.abs_1_xy", "bns.abs_1_xy")},
+    'E':     {'xz': ("bns.rad_E_xz", "bns.rad_m1_E"),
+              'xy': ("bns.rad_E_xy", "bns.rad_E_xy")},
+    'N':     {'xz': ("bns.rad_N_xz", "bns.rad_m1_N"),
+              'xy': ("bns.rad_N_xy", "bns.rad_N_xy")},
+    # fluid fields live in the prim dump (no species suffix)
+    'temperature': {'xz': ("bns.prim_xz", "bns.prim_xz"),
+                    'xy': ("bns.prim_xy", "bns.prim_xy")},
+    's_00':        {'xz': ("bns.prim_xz", "bns.prim_xz"),
+                    'xy': ("bns.prim_xy", "bns.prim_xy")},
+}
+SP_LABEL = {0: r"\nu_e", 1: r"\bar\nu_e", 2: r"\nu_x", 3: r"\bar\nu_x"}
+# colormap for the run panels — match BNS_all.py style (rates=inferno, T=viridis, Ye=plasma)
+RATE_CMAP = "inferno"
+VAR_CMAP = {'temperature': 'viridis', 's_00': 'plasma'}
+# fixed display range (linear), matching BNS_all.py; overrides auto-scaling
+VAR_RANGE = {'temperature': (0.0, 70.0), 's_00': (0.0, 0.5)}
+# third panel = SIGNED difference (A-B) on a symlog scale spanning +/- this
+# magnitude (diverging, centered on 0):
+VAR_DIFF = {'temperature': 3.0, 's_00': 0.1}
+DIFF_UNIT = {'temperature': r"\mathrm{MeV}", 's_00': r""}
+
+
+def spatial_units(units):
+    """Axis scale (M_sun -> displayed) and label; mirrors BNS_all.spatial_units."""
+    if units in ("cgs", "ngs"):
+        return 1.476625038, r"\mathrm{km}"   # 1 M_sun in km (G=c=1)
+    return 1.0, r"\mathrm{M}_\odot"
+
+
+def find_output_dirs(simpath):
+    ds = sorted(glob.glob(os.path.join(simpath, "output-*")))
+    return ds if ds else [simpath]
+
+
+def detect_prefix(output_dirs, new_pref, old_pref):
+    for d in output_dirs:
+        if glob.glob(os.path.join(d, "bin", new_pref + ".*.bin")):
+            return new_pref
+        if glob.glob(os.path.join(d, "bin", old_pref + ".*.bin")):
+            return old_pref
+    return new_pref
+
+
+_FRAME_CACHE = {}
+
+
+def frames_by_time(output_dirs, prefix):
+    """{rounded_time: filepath} across all segments (latest wins on dup)."""
+    key = (prefix, tuple(output_dirs))
+    if key in _FRAME_CACHE:
+        return _FRAME_CACHE[key]
+    tm = {}
+    for d in output_dirs:
+        for f in sorted(glob.glob(os.path.join(d, "bin", prefix + ".*.bin"))):
+            try:
+                t = BinaryData(f).time
+            except Exception:
+                continue
+            if np.isfinite(t):
+                tm[round(t, 1)] = f
+    _FRAME_CACHE[key] = tm
+    return tm
+
+
+def rasterize(bd, var, xlim, zlim, nx, nz):
+    """Sample an AthenaK xz slice onto a uniform (nz, nx) grid (nearest cell)."""
+    xs = np.linspace(xlim[0], xlim[1], nx)
+    zs = np.linspace(zlim[0], zlim[1], nz)
+    grid = np.full((nz, nx), np.nan)
+    for block, data in bd.get_block_data(var):
+        x0, x1, z0, z1 = block.get_extent()
+        nbz, nbx = data.shape
+        dxb = (x1 - x0) / nbx
+        dzb = (z1 - z0) / nbz
+        cx = np.where((xs >= x0) & (xs < x1))[0]
+        cz = np.where((zs >= z0) & (zs < z1))[0]
+        if cx.size == 0 or cz.size == 0:
+            continue
+        ibx = np.clip(((xs[cx] - x0) / dxb).astype(int), 0, nbx - 1)
+        ibz = np.clip(((zs[cz] - z0) / dzb).astype(int), 0, nbz - 1)
+        grid[np.ix_(cz, cx)] = data[np.ix_(ibz, ibx)]
+    return xs, zs, grid
+
+
+def render_one(var, t, fA, fB, labels, units, outdir, out_prefix,
+               xlim, zlim, nx, nz, rmax, coord_scale, coord_label, vlabel,
+               rate_vmin=None, rate_vmax=None):
+    has_sp = ":" in var
+    base, _, sp = var.partition(":")
+    sp = int(sp) if sp else 0
+    pp_key = f"{base}:0" if has_sp else base   # opacity params keyed on species 0
+    scale, plabel, use_log, vmin, vmax = au.plot_params(pp_key, units)
+    cmap = VAR_CMAP.get(base, RATE_CMAP)
+    if base in VAR_RANGE:
+        # fluid fields (T, Ye): fixed BNS_all.py display range, linear
+        vmin, vmax = VAR_RANGE[base]
+    else:
+        # rate color range: prefer explicit / auto-tuned range over the very wide
+        # plot_params defaults (which wash the rates out to one color)
+        if rate_vmin is not None:
+            vmin = rate_vmin
+        if rate_vmax is not None:
+            vmax = rate_vmax
+
+    bdA, bdB = BinaryData(fA), BinaryData(fB)
+    _, _, gA = rasterize(bdA, var, xlim, zlim, nx, nz)
+    _, _, gB = rasterize(bdB, var, xlim, zlim, nx, nz)
+    gA = gA * scale
+    gB = gB * scale
+
+    ext = [xlim[0] * coord_scale, xlim[1] * coord_scale,
+           zlim[0] * coord_scale, zlim[1] * coord_scale]
+    run_norm = (LogNorm(vmin=vmin, vmax=vmax) if use_log
+                else Normalize(vmin=vmin, vmax=vmax))
+
+    is_diff = base in VAR_DIFF
+    if is_diff:
+        # third panel = SIGNED difference (A - B), diverging symlog
+        third = gA - gB
+        dmax = VAR_DIFF[base]
+    else:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            third = np.where((gA > 0) & (gB > 0), gA / gB, np.nan)
+            # mask cells where BOTH runs are below the colorbar floor (negligible
+            # signal) — otherwise the ratio of two near-zero values is pure noise.
+            floor = vmin if (vmin and vmin > 0) else 0.0
+            third = np.where((gA > floor) | (gB > floor), third, np.nan)
+            # clip into the displayed decade so out-of-range cells saturate
+            third = np.clip(third, 1.0 / rmax, rmax)
+
+    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6), constrained_layout=True)
+    _NICE = {'temperature': r"T~[\mathrm{MeV}]", 's_00': r"Y_e"}
+    if has_sp:
+        title = rf"${base}\;[{SP_LABEL.get(sp, str(sp))}]$"
+    else:
+        title = rf"${_NICE.get(base, base)}$"
+    fig.suptitle(rf"{title}   $t={t:.1f}\,\mathrm{{M}}_\odot$", fontsize=13)
+
+    for ax, g, ttl in ((axes[0], gA, labels[0]), (axes[1], gB, labels[1])):
+        im = ax.imshow(g, origin="lower", extent=ext, cmap=cmap,
+                       norm=run_norm, interpolation="nearest")
+        ax.set_title(ttl)
+        ax.set_xlabel(rf"$x~[{coord_label}]$")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02, label=plabel)
+    axes[0].set_ylabel(rf"${vlabel}~[{coord_label}]$")
+
+    if is_diff:
+        # signed-difference panel: diverging LINEAR, +/- dmax about 0
+        du = DIFF_UNIT.get(base, "")
+        _dcmap = matplotlib.colormaps["RdBu_r"].copy()
+        im = axes[2].imshow(third, origin="lower", extent=ext, cmap=_dcmap,
+                            norm=Normalize(vmin=-dmax, vmax=dmax),
+                            interpolation="nearest")
+        axes[2].set_title(f"{labels[0]} $-$ {labels[1]}")
+        axes[2].set_xlabel(rf"$x~[{coord_label}]$")
+        ticks = [-dmax, -0.5 * dmax, 0.0, 0.5 * dmax, dmax]
+        _dl = rf"$\Delta~[{du}]$" if du else r"$\Delta Y_e$"
+        cb = fig.colorbar(im, ax=axes[2], fraction=0.046, pad=0.02, ticks=ticks,
+                          label=_dl)
+        cb.ax.set_yticklabels([f"{v:g}" for v in ticks])
+    else:
+        # ratio panel: diverging map, LOG scale centered on 1 (symmetric: 1/rmax..rmax)
+        _rcmap = matplotlib.colormaps["RdBu_r"].copy()
+        _rcmap.set_bad("0.85")   # negligible-signal cells shown as light gray
+        im = axes[2].imshow(third, origin="lower", extent=ext, cmap=_rcmap,
+                            norm=LogNorm(vmin=1.0 / rmax, vmax=rmax),
+                            interpolation="nearest")
+        axes[2].set_title(f"{labels[0]} / {labels[1]}")
+        axes[2].set_xlabel(rf"$x~[{coord_label}]$")
+        # symmetric ticks in log about 1, e.g. 0.1, 0.316, 1, 3.16, 10 for rmax=10
+        ticks = sorted({1.0 / rmax, 1.0 / np.sqrt(rmax), 1.0,
+                        np.sqrt(rmax), rmax})
+        cb = fig.colorbar(im, ax=axes[2], fraction=0.046, pad=0.02, ticks=ticks,
+                          label=f"ratio  (white=equal, blue<1<red, sat @ {rmax:g}$\\times$)")
+        cb.ax.set_yticklabels([f"{v:g}" for v in ticks])
+
+    os.makedirs(outdir, exist_ok=True)
+    out = os.path.join(outdir, f"{out_prefix}_{t:09.1f}.png")
+    fig.savefig(out, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    med = np.nanmedian(third)
+    return out, med
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--run", action="append", required=True, dest="runs",
+                    help="Run directory (contains output-*/bin/). Give exactly two.")
+    ap.add_argument("--label", action="append", dest="labels",
+                    help="Legend label per --run (same order).")
+    ap.add_argument("--vars", nargs="+",
+                    default=["eta_1:2", "abs_1:2", "eta_0:2", "eta_1:0", "abs_1:0"],
+                    help="Variables as base:species, e.g. eta_1:2 abs_1:2 E:0.")
+    ap.add_argument("--units", default="cgs", choices=["code", "cgs", "ngs"])
+    ap.add_argument("--plane", default="xz", choices=["xz", "xy"],
+                    help="Slice plane to compare (needs the matching *_<plane> dumps).")
+    ap.add_argument("--xlim", nargs=2, type=float, default=[-60, 60],
+                    help="x-range [M_sun].")
+    ap.add_argument("--zlim", nargs=2, type=float, default=[-60, 60],
+                    help="vertical-axis range [M_sun] (z for xz, y for xy).")
+    ap.add_argument("--nx", type=int, default=400)
+    ap.add_argument("--nz", type=int, default=400)
+    ap.add_argument("--rmax", type=float, default=10.0,
+                    help="Ratio color half-range: panel spans 1/rmax .. rmax "
+                         "(log, symmetric about 1). Default 10 -> 0.1 .. 1 .. 10.")
+    ap.add_argument("--rate-vmin", type=float, default=None,
+                    help="Override rate (left panels) color min [display units].")
+    ap.add_argument("--rate-vmax", type=float, default=None,
+                    help="Override rate (left panels) color max [display units].")
+    ap.add_argument("--outdir", default=None,
+                    help="Output dir (default: <run A>/compare_opacity/).")
+    ap.add_argument("--every", type=int, default=1,
+                    help="Use every Nth matched time (thin frames).")
+    args = ap.parse_args()
+
+    if len(args.runs) != 2:
+        ap.error("Provide exactly two --run.")
+    labels = args.labels or [os.path.basename(os.path.normpath(r)) for r in args.runs]
+    if len(labels) != 2:
+        ap.error("Need one --label per --run.")
+    coord_scale, coord_label = spatial_units(args.units)
+    vlabel = "y" if args.plane == "xy" else "z"
+    outdir = args.outdir or os.path.join(args.runs[0],
+                                         f"compare_opacity_{args.plane}")
+    odirs = [find_output_dirs(r) for r in args.runs]
+
+    print(f"A = {labels[0]} : {args.runs[0]}")
+    print(f"B = {labels[1]} : {args.runs[1]}")
+    print(f"plane={args.plane}  units={args.units}  xlim={args.xlim}  "
+          f"zlim={args.zlim}  rmax={args.rmax}")
+    print(f"outdir = {outdir}\n")
+
+    for var in args.vars:
+        base = var.partition(":")[0]
+        if base not in VAR_PREFIX:
+            print(f"[skip] unknown var base '{base}' in '{var}'"); continue
+        prefA = detect_prefix(odirs[0], *VAR_PREFIX[base][args.plane])
+        prefB = detect_prefix(odirs[1], *VAR_PREFIX[base][args.plane])
+        tA = frames_by_time(odirs[0], prefA)
+        tB = frames_by_time(odirs[1], prefB)
+        common = sorted(set(tA) & set(tB))[::args.every]
+        if not common:
+            print(f"[{var}] no common times (A:{len(tA)} B:{len(tB)}) "
+                  f"for plane={args.plane} (prefix {prefA})"); continue
+        out_prefix = f"cmp_{var.replace(':', '_')}"
+        # auto rate range from the LAST (most active) matched frame unless
+        # explicitly overridden -> fixes the "one color everywhere" washout
+        rv_min, rv_max = args.rate_vmin, args.rate_vmax
+        if base in VAR_RANGE:
+            rv_min, rv_max = VAR_RANGE[base]     # fixed BNS_all.py range
+        elif rv_min is None or rv_max is None:
+            scale, _, use_log, _, _ = au.plot_params(f"{base}:0", args.units)
+            g = []
+            for f in (tA[common[-1]], tB[common[-1]]):
+                _, _, gg = rasterize(BinaryData(f), var, args.xlim, args.zlim,
+                                     args.nx, args.nz)
+                g.append((gg * scale).ravel())
+            g = np.concatenate(g)
+            g = g[np.isfinite(g) & (g > 0)]
+            if g.size:
+                if use_log:
+                    # top ~5 decades below the peak -> good contrast in the
+                    # bright (emitting) region; faint outskirts saturate low
+                    hi = 10 ** np.ceil(np.log10(np.percentile(g, 99.8)))
+                    if rv_max is None:
+                        rv_max = hi
+                    if rv_min is None:
+                        rv_min = rv_max / 1e5
+                else:
+                    lo, hi = np.percentile(g, [2.0, 99.8])
+                    if rv_min is None:
+                        rv_min = lo
+                    if rv_max is None:
+                        rv_max = hi
+        print(f"[{var}] {len(common)} matched times "
+              f"[{common[0]:.0f},{common[-1]:.0f}] M_sun  rate range=[{rv_min:.2e},{rv_max:.2e}]")
+        for i, t in enumerate(common):
+            try:
+                _, med = render_one(var, t, tA[t], tB[t], labels, args.units,
+                                    outdir, out_prefix, args.xlim, args.zlim,
+                                    args.nx, args.nz, args.rmax,
+                                    coord_scale, coord_label, vlabel,
+                                    rate_vmin=rv_min, rate_vmax=rv_max)
+            except Exception as e:
+                print(f"  t={t:.1f} FAILED: {e}"); continue
+            if i == 0 or i == len(common) - 1:
+                print(f"  t={t:.1f}  median(A/B)={med:.3f}")
+        print(f"  -> {outdir}/{out_prefix}_*.png")
+
+
+if __name__ == "__main__":
+    main()

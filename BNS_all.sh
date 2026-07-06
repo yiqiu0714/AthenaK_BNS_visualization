@@ -85,6 +85,8 @@ SECTIONS=(
     temperature   # temperature slice frames      [+ trackers + AMR grid]
     s00           # electron fraction (s_00) frames
     # s00_avg       # area-weighted average Y_e vs time (1-D timeseries)
+    bnorm         # magnetic field magnitude |B| slice frames   [bns.prim_xy bcc1-3]
+    bmax          # global max |B| & location vs time (1-D timeseries) [bns.prim3D]
     z4c
     rad_E         # radiation energy E:0 frames          [bns.rad_m1_E]
     rad_N         # radiation number density N:0 frames  [bns.rad_m1_N]

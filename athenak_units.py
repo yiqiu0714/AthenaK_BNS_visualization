@@ -34,6 +34,8 @@ Rest-mass density: code (G=c=Msun=1)→  CGS g/cm^3       × CODE2CGS_DENS ≈ 6
 Avg. ν energy E/N: code km^-2/fm^-3 →  MeV               × CODE2MEV_AVGENE
 """
 
+import math
+
 from matplotlib.colors import LogNorm, Normalize
 
 # ---------------------------------------------------------------------------
@@ -102,6 +104,17 @@ CODE2CGS_DENS     = Msun / _unit_len_cgs**3    # ≈ 6.178e17
 # Average neutrino energy E/N: code ratio (km^-2)/(fm^-3) → MeV
 CODE2MEV_AVGENE   = GK2NGS_ENEDENS / CODE2NGS_NUMDENS  # ≈ 7.556e5
 
+# Magnetic field: code → Gauss.
+# AthenaK GRMHD uses the geometrized Gaussian (magnetic pressure = b^2/2)
+# convention in the same G=c=M_sun=1 system as the rest-mass density, so the
+# magnetic energy density b^2/2 (code) maps to erg/cm^3 via CODE2CGS_DENS*c^2.
+# Hence B_Gauss = sqrt(8*pi*u_cgs) = b_code * sqrt(4*pi*CODE2CGS_DENS)*c.
+CODE2CGS_BFIELD   = c * math.sqrt(4.0 * math.pi * CODE2CGS_DENS)  # ≈ 8.35e19 G
+
+# Time: code (G=c=M_sun=1) → seconds / milliseconds
+_unit_time_s      = _unit_len_cgs / c          # ≈ 4.927e-6 s
+CODE2MS           = _unit_time_s * 1e3         # code time → ms
+
 # ---------------------------------------------------------------------------
 # Explicit conversion functions  (mirror scidata.units.conv_*)
 # ---------------------------------------------------------------------------
@@ -161,6 +174,20 @@ def conv_avg_energy(val, units='MeV'):
     raise ValueError(f"avg_energy: unsupported units {units!r}")
 
 
+def conv_bfield(val, units='cgs'):
+    """Magnetic field magnitude |B| (code G=c=Msun=1 units) → target units."""
+    if units == 'code':        return val
+    if units in ('cgs', 'ngs'): return val * CODE2CGS_BFIELD   # Gauss
+    raise ValueError(f"bfield: unsupported units {units!r}")
+
+
+def conv_time(val, units='cgs'):
+    """Coordinate time (code G=c=Msun=1 units) → target units."""
+    if units == 'code':        return val
+    if units in ('cgs', 'ngs'): return val * CODE2MS           # milliseconds
+    raise ValueError(f"time: unsupported units {units!r}")
+
+
 # ---------------------------------------------------------------------------
 # Per-variable render parameters
 # ---------------------------------------------------------------------------
@@ -196,6 +223,7 @@ _CODE_VMIN = {
     'con_H':     1e-9,
     'avg_energy':1e-4,
     'nu_energy': 30.0 / CODE2MEV_AVGENE,
+    'bmag':      1e-10,
 }
 _CODE_VMAX = {
     'dens':      2e15   / CODE2CGS_DENS,   # ≈ 3.2e-3
@@ -209,6 +237,7 @@ _CODE_VMAX = {
     'con_H':     1e-4,
     'avg_energy':1e-3,
     'nu_energy': 150.0 / CODE2MEV_AVGENE,
+    'bmag':      1e-5,
 }
 
 # Scale factors: (var, units) → multiplicative factor applied to code values
@@ -239,6 +268,9 @@ _SCALES = {
     ('avg_energy','cgs'): CODE2MEV_AVGENE,
     ('nu_energy', 'ngs'): CODE2MEV_AVGENE,
     ('nu_energy', 'cgs'): CODE2MEV_AVGENE,
+    # magnetic field magnitude (cgs and ngs both yield Gauss)
+    ('bmag',     'cgs'): CODE2CGS_BFIELD,
+    ('bmag',     'ngs'): CODE2CGS_BFIELD,
 }
 
 # Axis / colorbar labels: (var, units) → LaTeX string
@@ -289,6 +321,10 @@ _LABELS = {
     ('con_H',     'code'): r"$|\mathcal{H}|$",
     ('con_H',     'ngs' ): r"$|\mathcal{H}|$",
     ('con_H',     'cgs' ): r"$|\mathcal{H}|$",
+    # magnetic field magnitude
+    ('bmag',      'code'): r"$|B|~[\mathrm{code}]$",
+    ('bmag',      'ngs' ): r"$|B|~[\mathrm{G}]$",
+    ('bmag',      'cgs' ): r"$|B|~[\mathrm{G}]$",
 }
 
 # Variables that use a linear (not log) colorscale

@@ -4,9 +4,15 @@ Plotting and movie-generation tools for **binary neutron star (BNS)** merger
 simulations run with [AthenaK](https://github.com/IAS-Astrophysics/athenak).
 
 The main driver renders time-history plots and 2-D slice frames (density,
-temperature, electron fraction, neutrino/radiation fields, …) from a
-simulation's `output-XXXX` restart segments, then stitches the frames into
-movies with `ffmpeg`.
+temperature, electron fraction, magnetic field magnitude |B|,
+neutrino/radiation fields, …) from a simulation's `output-XXXX` restart
+segments, then stitches the frames into movies with `ffmpeg`. It also writes
+1-D time series such as the global max |B| and its location (`bmax`).
+
+A companion driver, `BNS_3d.sh`, renders the 3-D snapshots (`bns.prim3D`) as
+PyVista isosurfaces (optionally threaded with magnetic-field / velocity
+streamlines) and Matplotlib orthoslices, including |B|, current (‖∇×B‖),
+vorticity, and the Q-criterion.
 
 ## Contents
 
@@ -14,6 +20,9 @@ movies with `ffmpeg`.
 |------|---------|
 | `BNS_all.py` | Main visualization driver. Fully configurable via command-line flags (`--help`). |
 | `BNS_all.sh` | Convenience wrapper: reads paths from `config.ini`, builds the argument list, runs `BNS_all.py`, then `make_movies.sh`. |
+| `BNS_3d.sh` | 3-D driver: renders `bns.prim3D` snapshots as PyVista isosurfaces + Matplotlib orthoslices, then makes movies. Uses `plot_3d_data/`. |
+| `plot_3d_data/` | 3-D rendering package (data loader, style/derived-field helpers, isosurface & orthoslice scripts). See its own `README.md`. |
+| `BNS_compare.py` / `BNS_compare.sh` | Side-by-side comparison of two runs: `[run A] [run B] [ratio A/B]` slice panels for opacity/radiation (and other) fields. |
 | `make_movies.sh` | Builds one MP4/GIF per frame sequence found in a `Figs/` directory. |
 | `athenak_units.py` | Unit conversions (code / CGS / NGS) and per-quantity plot parameters. |
 | `plot_time_per_cycle.py` | Standalone tool: wall-clock time-per-cycle distribution from `.out` logs. |
@@ -39,7 +48,19 @@ $EDITOR config.ini                 # set simpath (figpath is optional)
 ```
 
 `ffmpeg` is required for movie generation. On HPC systems the wrappers call
-`module load …`; edit those lines in `BNS_all.sh` if you use conda/venv instead.
+`module load …`; edit those lines in `BNS_all.sh` / `BNS_3d.sh` if you use
+conda/venv instead.
+
+**3-D pipeline (`BNS_3d.sh`)** additionally needs `pyvista`, `h5py`, `vtk`, and
+`imageio-ffmpeg` (`pip install -r plot_3d_data/requirements.txt imageio-ffmpeg`).
+On Aurora the `python` module is a venv (no `--user` installs), so install these
+into a directory and point `pythonpath_extra` at it in `config.ini`:
+
+```bash
+module load python/3.12.12 py-numpy py-matplotlib py-scipy py-pip
+python3.12 -m pip install --target ~/.python-extra/py312 pyvista imageio-ffmpeg h5py
+# then in config.ini:  pythonpath_extra = /home/<you>/.python-extra/py312
+```
 
 ## Usage
 
@@ -66,6 +87,34 @@ python3 BNS_all.py --simpath /path/to/run \
 ```
 
 Run `python3 BNS_all.py --help` for the full list of sections and flags.
+
+### 3-D isosurfaces & orthoslices
+
+```bash
+bash BNS_3d.sh
+```
+
+Finds every `bns.prim3D.*.bin` under `<simpath>/output-*/`, renders the `PLOTS`
+(`orthoslice`, `isosurface`) for each `SCALARS` entry (`log_dens`, `temperature`,
+`log_bmag`, and optionally `current`, `vorticity`, `qcriterion`), writes PNGs to
+`<simpath>/Figs_3d/`, and stitches movies. Edit `SCALARS`, `STREAMLINES`
+(`"B"`/`"velocity"` field lines on isosurfaces), `STRIDE`, `JOBS`, `UNITS`,
+`RESOLUTION`/`CROP`, and the per-scalar `ISO_LEVELS`/`ISO_CLIM` at the top of the
+script. Parallelism uses `xargs -P` (no GNU `parallel` needed) and movies use the
+`imageio-ffmpeg` binary if no system `ffmpeg` is present.
+
+The `ISO_LEVELS`/`ISO_CLIM` defaults assume `UNITS=cgs` (|B| in Gauss, ρ in
+g cm⁻³); switch the commented code-unit ranges if you set `UNITS=code`. The
+underlying scripts can also be called directly — see `plot_3d_data/README.md`.
+
+### Comparing two runs
+
+```bash
+bash BNS_compare.sh          # or: python3 BNS_compare.py --run A --run B ...
+```
+
+Renders `[run A] [run B] [ratio A/B]` slice panels for matched output times,
+rasterizing each run's (possibly different) AMR grid onto a common grid first.
 
 ### Movies only
 
