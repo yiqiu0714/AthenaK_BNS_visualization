@@ -45,15 +45,15 @@ export PYTHONPATH="${PYTHONPATH_EXTRA:+${PYTHONPATH_EXTRA}:}${SCRIPT_DIR}/plot-t
 
 # ======================== what to plot =================
 PLOTS=(
-    orthoslice          # xy / xz / yz Matplotlib slices
+    # orthoslice          # xy / xz / yz Matplotlib slices
     isosurface          # PyVista 3D nested isosurfaces
     # isosurface_colorT   # density isosurface colored by temperature
 )
 
 SCALARS=(
     log_dens            # log10(density)
-    temperature
-    log_bmag            # log10(|B|)  — Gauss in cgs, code-log10 in code units
+    # temperature
+    # log_bmag            # log10(|B|)  — Gauss in cgs, code-log10 in code units
     # current           # |curl B| (B-field "current" proxy)
     # vorticity         # |curl v|
     # qcriterion        # Q-criterion
@@ -64,12 +64,12 @@ SCALARS=(
 STREAMLINES=""
 
 # ======================== frame selection ==============
-STRIDE=10              # render every Nth snapshot (1 = all)
-# START=0              # uncomment to override first snapshot index
+STRIDE=1              # render every Nth snapshot (1 = all)
+START=0              # uncomment to override first snapshot index
 # END=80               # uncomment to override last  snapshot index
 
 # ======================== parallelism ==================
-JOBS=4                 # parallel jobs (1 = serial, 4-8 recommended on login node)
+JOBS=8                 # parallel jobs (1 = serial, 4-8 recommended on login node)
 
 # ======================== units ========================
 UNITS=cgs              # 'code' or 'cgs'  (cgs: density g/cm^3, |B| Gauss)
@@ -121,8 +121,8 @@ MOVIE_CRF=18               # H.264 quality: 0 (lossless) - 51 (worst)
 # MAKE_MOVIES=false        # uncomment to skip movie generation
 
 # ======================== skip existing ================
-SKIP_EXISTING=false
-# SKIP_EXISTING=true
+# SKIP_EXISTING=false
+SKIP_EXISTING=true
 
 # ======================== run banner ===================
 mkdir -p "${FIGPATH}"
