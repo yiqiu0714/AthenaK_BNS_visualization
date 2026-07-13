@@ -263,7 +263,7 @@ def main():
     ap.add_argument("--rate-vmax", type=float, default=None,
                     help="Override rate (left panels) color max [display units].")
     ap.add_argument("--outdir", default=None,
-                    help="Output dir (default: <run A>/compare_opacity/).")
+                    help="Output dir (default: <run A>/compare/).")
     ap.add_argument("--every", type=int, default=1,
                     help="Use every Nth matched time (thin frames).")
     args = ap.parse_args()
@@ -276,7 +276,7 @@ def main():
     coord_scale, coord_label = spatial_units(args.units)
     vlabel = "y" if args.plane == "xy" else "z"
     outdir = args.outdir or os.path.join(args.runs[0],
-                                         f"compare_opacity_{args.plane}")
+                                         f"compare_{args.plane}")
     odirs = [find_output_dirs(r) for r in args.runs]
 
     print(f"A = {labels[0]} : {args.runs[0]}")

@@ -25,20 +25,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Each analysis_dir must contain the merger_time.txt / Lnu_E_*.txt / Eav_*.txt
 # produced by run_analysis.sh.
 MODELS=(
-    "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/VVLR_test_6/analysis|eq (no NEPS)"
-    "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/VVLR_test_3/analysis|non-eq (no NEPS)"
-)
-
-MODELS=(
-    "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/VVLR_test_15/analysis|eq (w/ NEPS)"
-    "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/archive_20260625_235523/VVLR_eq_number/analysis|non-eq (w/ NEPS)"
+    "${SCRATCH}/athenak/nurates_base_noeq_VVLR/analysis|base"
+    "${SCRATCH}/athenak/nurates_nucl_noeq_VVLR/analysis|nucl"
+    "${SCRATCH}/athenak/nurates_dU_noeq_VVLR/analysis|dU"
+    "${SCRATCH}/athenak/nurates_WM_noeq_VVLR/analysis|WM"
 )
 
 # Output figure filename.
-OUT="fig_neutrino_comparison_noneps.png"
+OUT="fig_neutrino_comparison.png"
 
 # Where to write the figure (empty = <first analysis dir>/comparison_plot/).
-OUTDIR=""
+OUTDIR="${SCRATCH}/athenak/comparisons"
 
 # Override x-range [ms] about merger, e.g. XLIM=(-2 20).  Empty = model overlap.
 XLIM=()
@@ -62,15 +59,17 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # SETUP  (same Lmod handling as run_analysis.sh)
 # ─────────────────────────────────────────────────────────────────────────────
-if ! command -v module &>/dev/null; then
-    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
-                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh; do
-        [[ -r "${_init}" ]] && source "${_init}" && break
-    done
-fi
-if command -v module &>/dev/null; then
-    module load python py-numpy py-matplotlib
-fi
+#if ! command -v module &>/dev/null; then
+#    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
+#                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh; do
+#        [[ -r "${_init}" ]] && source "${_init}" && break
+#    done
+#fi
+#if command -v module &>/dev/null; then
+#    module load python py-numpy py-matplotlib
+#fi
+
+source /home/mu76rom/envs/conda.start
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Build comparison_plot.py args from MODELS

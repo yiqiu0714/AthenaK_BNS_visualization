@@ -109,20 +109,22 @@ done
 # ─────────────────────────────────────────────────────────────────────────────
 # Aurora uses environment modules. Lmod's `module` is usually only a shell
 # function for interactive shells, so source its init first if needed.
-if ! command -v module &>/dev/null; then
-    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
-                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh; do
-        [[ -r "${_init}" ]] && source "${_init}" && break
-    done
-fi
-if command -v module &>/dev/null; then
-    module load python py-numpy py-scipy py-matplotlib py-h5py
-fi
-# The module Python may have no pip/user-site; provide extra packages (e.g. vtk
-# needed by athplot.load_sph_vtk) via pythonpath_extra in config.ini.
-if [[ -n "${PYTHONPATH_EXTRA}" ]]; then
-    export PYTHONPATH="${PYTHONPATH_EXTRA}:${PYTHONPATH:-}"
-fi
+#if ! command -v module &>/dev/null; then
+#    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
+#                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh; do
+#        [[ -r "${_init}" ]] && source "${_init}" && break
+#    done
+#fi
+#if command -v module &>/dev/null; then
+#    module load python py-numpy py-scipy py-matplotlib py-h5py
+#fi
+## The module Python may have no pip/user-site; provide extra packages (e.g. vtk
+## needed by athplot.load_sph_vtk) via pythonpath_extra in config.ini.
+#if [[ -n "${PYTHONPATH_EXTRA}" ]]; then
+#    export PYTHONPATH="${PYTHONPATH_EXTRA}:${PYTHONPATH:-}"
+#fi
+
+source /home/mu76rom/envs/conda.start
 
 mkdir -p "${OUTPUT_DIR}"
 
