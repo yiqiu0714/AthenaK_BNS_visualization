@@ -17,7 +17,7 @@ Outputs:
 
 import os
 import sys
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, set_start_method
 import numpy as np
 from scipy.integrate import simpson
 import h5py
@@ -35,6 +35,8 @@ from athplot.utils.units import conv_dens, cactus, cgs
 from utils_ejecta import (calc_ur, sqrt_det_metric_adm, get_riemann_weights,
                           sum_over_time)
 
+# needed in some environments to be able to multiprocess via bash wrapper
+set_start_method("fork", force=True)
 
 # ===================================================================
 # Configuration

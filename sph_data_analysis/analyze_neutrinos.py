@@ -75,7 +75,7 @@ Output files (written to OUTPUT_DIR):
 import os
 import sys
 import numpy as np
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, set_start_method
 
 SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
 # plot-tools submodule lives at the repository root (one level above this folder).
@@ -87,6 +87,9 @@ sys.path.append(SCRIPTDIR)  # utils_ejecta.py lives alongside this script
 from athplot.load_sph_vtk import SphericalData
 from athplot.utils.units import conv_luminosity, conv_energy, cactus, cgs
 from utils_ejecta import sum_over_time
+
+# needed in some environments to be able to multiprocess via bash wrapper
+set_start_method("fork", force=True)
 
 
 # ===================================================================
