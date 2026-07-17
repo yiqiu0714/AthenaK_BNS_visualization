@@ -82,49 +82,40 @@ if [[ ! -d "${FIGPATH}" ]]; then
     return 1 2>/dev/null || exit 1
 fi
 
-cd "${FIGPATH}"
+# Absolutize so the ffmpeg concat lists are unambiguous regardless of CWD.
+FIGPATH="$(cd "${FIGPATH}" && pwd)"
 
 # ---------------------------------------------------------------------------
-# Discover unique frame-sequence prefixes
-# Pattern: bns_frame_<something>_NNNNN.png
+# Discover frame sequences.  Each diagnostic renders into its own subfolder
+# <name>_xy/ holding one sequence (<job>_frame_<name>_NNNNN.png), so there is
+# exactly one movie per subfolder.  Single-image diagnostics (history,
+# run_speed, ...) stay flat in FIGPATH and are ignored.
 # ---------------------------------------------------------------------------
-shopt -s nullglob   # unmatched globs expand to nothing instead of literal string
-PNGS=( bns_frame_*_?????.png )
+MOVIEDIR="${FIGPATH}/all_movies"
+mkdir -p "${MOVIEDIR}"
+
+shopt -s nullglob
+SUBDIRS=( "${FIGPATH}"/*/ )
 shopt -u nullglob
-
-if [[ ${#PNGS[@]} -eq 0 ]]; then
-    echo "No bns_frame_*_NNNNN.png files found in ${FIGPATH}"
-    return 0 2>/dev/null || exit 0
-fi
-
-# Extract unique prefixes (strip trailing _NNNNN.png)
-unset _seen; declare -A _seen
-PREFIXES=()
-for f in "${PNGS[@]}"; do
-    p="${f%_?????.png}"
-    if [[ -z "${_seen[$p]+x}" ]]; then
-        _seen[$p]=1
-        PREFIXES+=("$p")
-    fi
-done
 
 echo "FIGPATH : ${FIGPATH}"
 echo "FPS     : ${FPS}"
 echo "STRIDE  : ${STRIDE}"
-echo "Found ${#PREFIXES[@]} sequence(s)"
-echo ""
 
 # ---------------------------------------------------------------------------
-# Build one movie per prefix (sequential)
+# Build one movie per frame subfolder (sequential)
 # ---------------------------------------------------------------------------
-for prefix in "${PREFIXES[@]}"; do
+_n_made=0
+for d in "${SUBDIRS[@]}"; do
+    d="${d%/}"
+    [[ "$(basename "${d}")" == "all_movies" ]] && continue
+
     shopt -s nullglob
-    ALL_FRAMES=( $(ls "${prefix}"_?????.png | sort) )
+    ALL_FRAMES=( "${d}"/*_?????.png )
     shopt -u nullglob
+    [[ ${#ALL_FRAMES[@]} -eq 0 ]] && continue
 
-    if [[ ${#ALL_FRAMES[@]} -eq 0 ]]; then
-        continue
-    fi
+    IFS=$'\n' ALL_FRAMES=( $(printf '%s\n' "${ALL_FRAMES[@]}" | sort) ); unset IFS
 
     # Sub-sample: keep every STRIDEth frame
     FRAMES=()
@@ -132,14 +123,14 @@ for prefix in "${PREFIXES[@]}"; do
         FRAMES+=("${ALL_FRAMES[j]}")
     done
 
-    # GIF → .gif; everything else → .mp4
+    name="$(basename "${d}")"                     # e.g. temperature_xy
     [[ "${VCODEC}" == "gif" ]] && _ext="gif" || _ext="mp4"
-    outfile="${prefix}.${_ext}"
-    listfile="${prefix}.fflist"
+    outfile="${MOVIEDIR}/${name}.${_ext}"
+    listfile="${d}/.fflist"
 
-    echo "[${prefix}]  ${#ALL_FRAMES[@]} available, ${#FRAMES[@]} used  ->  $(basename "${outfile}")"
+    echo "[${name}]  ${#ALL_FRAMES[@]} available, ${#FRAMES[@]} used  ->  $(basename "${outfile}")"
 
-    # Write ffmpeg concat file list
+    # Write ffmpeg concat file list (absolute frame paths)
     : > "${listfile}"
     for f in "${FRAMES[@]}"; do
         printf "file '%s'\n" "${f}" >> "${listfile}"
@@ -170,20 +161,13 @@ for prefix in "${PREFIXES[@]}"; do
     fi
 
     rm -f "${listfile}"
+    _n_made=$((_n_made + 1))
     echo ""
 done
 
-# ---------------------------------------------------------------------------
-# Move all generated movies into all_movies/
-# ---------------------------------------------------------------------------
-MOVIEDIR="${FIGPATH}/all_movies"
-mkdir -p "${MOVIEDIR}"
-shopt -s nullglob
-_movies=( bns_frame_*.gif bns_frame_*.mp4 )
-shopt -u nullglob
-if [[ ${#_movies[@]} -gt 0 ]]; then
-    mv "${_movies[@]}" "${MOVIEDIR}/"
-    echo "Moved ${#_movies[@]} movie(s) to ${MOVIEDIR}/"
+if [[ ${_n_made} -eq 0 ]]; then
+    echo "No frame subfolders (*/*_NNNNN.png) found under ${FIGPATH}"
+else
+    echo "Made ${_n_made} movie(s) in ${MOVIEDIR}/"
 fi
-
 echo "Done."

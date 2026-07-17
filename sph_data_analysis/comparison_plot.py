@@ -21,11 +21,17 @@ python comparison_plot.py \
 
 import argparse
 import os
+import sys
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import plot_style  # central house style (repo root); see plot_style.py
+
+plot_style.use()
 
 # Unit conversions (match plot_analysis.py)
 G          = 6.67430e-11
@@ -119,7 +125,7 @@ def main():
     else:
         xlo, xhi = overlap_xlim(models)
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, axes = plot_style.subplots(1, 2, panel_w=5.5, panel_h=4.2)
     fig.suptitle("BNS — Neutrino emission: model comparison", fontsize=13)
 
     # ---- Panel 0: energy luminosity (log) ----

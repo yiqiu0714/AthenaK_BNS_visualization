@@ -252,7 +252,11 @@ def _process_snapshot_ejecta(args):
     total_Ber = flux_rate_Ber.sum()
 
     vinf_geo = _np.sqrt(_np.where(ut_cov  < -1, 1.0 - ut_cov **-2, 0.0))
-    vinf_Ber = _np.sqrt(_np.where(hut_cov < -1, 1.0 - hut_cov**-2, 0.0))
+    # Bernoulli v_inf uses the asymptotic enthalpy h_min (ejecta cools to the
+    # cold floor): W_inf = -h*u_t / h_min, so v_inf = sqrt(1 - (h_min/h*u_t)^2).
+    # Threshold matches mask_Ber so v_inf is defined for exactly the unbound cells.
+    vinf_Ber = _np.sqrt(_np.where(hut_cov < -eos['h_min'],
+                                  1.0 - (eos['h_min'] / hut_cov)**2, 0.0))
 
     result = {
         'time':         time,
@@ -268,7 +272,7 @@ def _process_snapshot_ejecta(args):
 
     if result['in_2d']:
         sel_geo = (ut_cov  < -1).flatten()
-        sel_Ber = (hut_cov < -1).flatten()
+        sel_Ber = (hut_cov < -eos['h_min']).flatten()
         result['hist2d_geo'], _, _ = _np.histogram2d(
             vinf_geo.flatten()[sel_geo], theta.flatten()[sel_geo],
             bins=[V_BINS, theta_edges],
@@ -285,6 +289,17 @@ def _process_snapshot_ejecta(args):
         )
         result['hist_ye_Ber'], _ = _np.histogram(
             ye.flatten()[sel_Ber], bins=YE_BINS,
+            weights=flux_rate_Ber.flatten()[sel_Ber],
+        )
+        # 2-D Y_e vs theta: angular distribution of ejecta composition
+        result['hist2d_ye_theta_geo'], _, _ = _np.histogram2d(
+            ye.flatten()[sel_geo], theta.flatten()[sel_geo],
+            bins=[YE_BINS, theta_edges],
+            weights=flux_rate_geo.flatten()[sel_geo],
+        )
+        result['hist2d_ye_theta_Ber'], _, _ = _np.histogram2d(
+            ye.flatten()[sel_Ber], theta.flatten()[sel_Ber],
+            bins=[YE_BINS, theta_edges],
             weights=flux_rate_Ber.flatten()[sel_Ber],
         )
 
@@ -378,6 +393,8 @@ def main():
     hist2d_Ber_arr   = np.array([r['hist2d_Ber']   for r in res_2d])
     hist_ye_geo_arr  = np.array([r['hist_ye_geo']  for r in res_2d])
     hist_ye_Ber_arr  = np.array([r['hist_ye_Ber']  for r in res_2d])
+    hist2d_ye_theta_geo_arr = np.array([r['hist2d_ye_theta_geo'] for r in res_2d])
+    hist2d_ye_theta_Ber_arr = np.array([r['hist2d_ye_theta_Ber'] for r in res_2d])
 
     # ------------------------------------------------------------------
     # Post-processing
@@ -387,6 +404,9 @@ def main():
 
     dMej_Ye_geo = sum_over_time(hist_ye_geo_arr, time_2d_arr)  # (NYe,)
     dMej_Ye_Ber = sum_over_time(hist_ye_Ber_arr, time_2d_arr)
+
+    dMej_ye_theta_geo = sum_over_time(hist2d_ye_theta_geo_arr, time_2d_arr)  # (NYe, Ntheta)
+    dMej_ye_theta_Ber = sum_over_time(hist2d_ye_theta_Ber_arr, time_2d_arr)
 
     # Marginals
     dMej_geo = dMej_2d_geo.sum(axis=1)          # (Nv,)  — vinf histogram
@@ -463,6 +483,10 @@ def main():
                header='vinf bin centers [c]', fmt='%.6e')
     np.savetxt(os.path.join(OUTPUT_DIR, 'theta_centers_2d.txt'), theta_centers,
                header='theta bin centers [rad]', fmt='%.6e')
+
+    # -- 2D Y_e x theta arrays (NYe x Ntheta): angular composition of ejecta --
+    np.save(os.path.join(OUTPUT_DIR, 'Mej_Ye_theta_geo.npy'), dMej_ye_theta_geo)
+    np.save(os.path.join(OUTPUT_DIR, 'Mej_Ye_theta_Ber.npy'), dMej_ye_theta_Ber)
 
     # -- Y_e outputs --
     np.savetxt(os.path.join(OUTPUT_DIR, 'Ye_avg_geo.txt'),

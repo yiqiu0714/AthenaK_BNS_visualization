@@ -38,6 +38,9 @@ sys.path.append(os.environ.get("ATHPLOT_PATH", os.path.join(_HERE, "plot-tools")
 sys.path.append(_HERE)
 from athplot.load_ath_bin import BinaryData   # noqa: E402
 import athenak_units as au                      # noqa: E402
+import plot_style                               # noqa: E402
+
+plot_style.use()  # central house style (see plot_style.py)
 
 # variable shorthand -> per-plane (new dump prefix, old prefix)
 # NB: the "old" fallback (rad_m1_*) is the SPHERICAL-surface dump, not a slice,
@@ -182,7 +185,8 @@ def render_one(var, t, fA, fB, labels, units, outdir, out_prefix,
             # clip into the displayed decade so out-of-range cells saturate
             third = np.clip(third, 1.0 / rmax, rmax)
 
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6), constrained_layout=True)
+    fig, axes = plot_style.subplots(1, 3, panel_w=4.5, panel_h=4.6,
+                                    constrained_layout=True)
     _NICE = {'temperature': r"T~[\mathrm{MeV}]", 's_00': r"Y_e"}
     if has_sp:
         title = rf"${base}\;[{SP_LABEL.get(sp, str(sp))}]$"

@@ -11,6 +11,12 @@ import matplotlib.pyplot as plt
 import os
 import re
 import glob
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import plot_style  # central house style (see plot_style.py)
+
+plot_style.use()
 
 # -------------------------------------------------------------------------
 # Configuration (override on the command line; see --help)
@@ -106,7 +112,7 @@ print(f"Time per cycle: median={np.median(time_per_cycle):.3f}s, "
 # -------------------------------------------------------------------------
 # Plot 1: Histogram of time per cycle
 # -------------------------------------------------------------------------
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+fig, axes = plot_style.subplots(2, 2, panel_w=7, panel_h=5)
 
 # Percentiles weighted by total time (cumulative time fraction)
 sorted_tpc = np.sort(time_per_cycle)

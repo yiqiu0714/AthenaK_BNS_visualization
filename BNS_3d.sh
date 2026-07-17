@@ -19,30 +19,9 @@ set -uo pipefail
 # ======================== internals (paths/env) ========================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLOT3D_DIR="${SCRIPT_DIR}/plot_3d_data"
-CONFIG_FILE="${SCRIPT_DIR}/config.ini"
-
-if [[ ! -f "${CONFIG_FILE}" ]]; then
-    echo "ERROR: ${CONFIG_FILE} not found."
-    echo "       Copy config.example.ini to config.ini and set 'simpath'."
-    exit 1
-fi
-
-# Read one key from the [paths] section (or anywhere) of the INI file.
-_cfg_get() {
-    awk -v key="$1" '
-        /^[[:space:]]*[#;]/ { next }              # comment line
-        /^[[:space:]]*\[/   { next }              # section header
-        {
-            k = $0; sub(/=.*/, "", k)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
-            if (k == key && index($0, "=")) {
-                v = substr($0, index($0, "=") + 1)
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-                print v; exit
-            }
-        }
-    ' "${CONFIG_FILE}"
-}
+# All machine-specific settings (paths + environment) come from config.ini.
+# load_config.sh reads it, defines _cfg_get, and activates the environment.
+source "${SCRIPT_DIR}/load_config.sh"
 
 SIMPATH="$(_cfg_get simpath)"
 PYTHONPATH_EXTRA="$(_cfg_get pythonpath_extra)"
@@ -54,25 +33,9 @@ fi
 # 3D frames go to a separate directory so they don't collide with the 2D Figs.
 FIGPATH="${SIMPATH}/Figs_3d"
 
-# ---------------------------------------------------------------------------
-# Python environment (Aurora).  Source Lmod so `module` works in this
-# non-interactive shell, then load the toolchain.  pyvista / h5py / vtk /
-# imageio-ffmpeg are not provided as modules — they live in pythonpath_extra
-# (installed with: python3.12 -m pip install --target <pythonpath_extra> ...).
-# ---------------------------------------------------------------------------
-if ! command -v module &>/dev/null; then
-    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
-                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh \
-                 /etc/profile.d/00-modulepath.sh; do
-        [[ -r "${_init}" ]] && source "${_init}" && break
-    done
-fi
-if command -v module &>/dev/null; then
-    module load python/3.12.12 py-numpy py-matplotlib py-scipy 2>/dev/null
-else
-    echo "WARNING: 'module' command not found; relying on the current environment."
-fi
-
+# Python environment was activated by load_config.sh (config.ini's env_setup).
+# pyvista / h5py / vtk / imageio-ffmpeg are not module-provided — install them
+# and point pythonpath_extra at them in config.ini (see below).
 PYTHON="${PYTHON:-python3.12}"
 command -v "${PYTHON}" &>/dev/null || PYTHON=python3
 

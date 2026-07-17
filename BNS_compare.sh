@@ -46,18 +46,9 @@ elif [[ $# -ne 0 ]]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SETUP  (same Lmod handling as run_comparison.sh / BNS_all.sh)
+# SETUP  — machine environment from config.ini (env_setup: module/conda/venv)
 # ─────────────────────────────────────────────────────────────────────────────
-if ! command -v module &>/dev/null; then
-    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
-                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh; do
-        [[ -r "${_init}" ]] && source "${_init}" && break
-    done
-fi
-if command -v module &>/dev/null; then
-    module load python py-matplotlib py-numpy py-scipy 2>/dev/null || \
-        module load frameworks 2>/dev/null || true
-fi
+source "${SCRIPT_DIR}/load_config.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────
 ARGS=()

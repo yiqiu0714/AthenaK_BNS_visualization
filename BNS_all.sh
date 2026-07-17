@@ -20,30 +20,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #     output-0001/
 #     ...
 # ---------------------------------------------------------------------------
-CONFIG_FILE="${SCRIPT_DIR}/config.ini"
-if [[ ! -f "${CONFIG_FILE}" ]]; then
-    echo "ERROR: ${CONFIG_FILE} not found."
-    echo "       Copy config.example.ini to config.ini and set 'simpath'."
-    exit 1
-fi
-
-# Read one key from the [paths] section (or anywhere) of the INI file.
-# Lines are parsed as data; comments (#/;) and section headers are ignored.
-_cfg_get() {
-    awk -v key="$1" '
-        /^[[:space:]]*[#;]/ { next }              # comment line
-        /^[[:space:]]*\[/   { next }              # section header
-        {
-            k = $0; sub(/=.*/, "", k)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
-            if (k == key && index($0, "=")) {
-                v = substr($0, index($0, "=") + 1)
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-                print v; exit
-            }
-        }
-    ' "${CONFIG_FILE}"
-}
+# All machine-specific settings (paths + environment) come from config.ini.
+# load_config.sh reads it, defines _cfg_get, and activates the environment.
+source "${SCRIPT_DIR}/load_config.sh"
 
 SIMPATH="$(_cfg_get simpath)"
 FIGPATH="$(_cfg_get figpath)"
@@ -67,6 +46,10 @@ FULL_DOMAIN=false
 
 # Unit system for physical quantities: 'code', 'cgs', or 'ngs'  (default: cgs)
 UNITS=cgs
+
+# AthenaK job name prefixing all input/output files (bns.*, bns_frame_*, ...).
+# Set to bhns/bbh/... to visualize other systems with the same driver.
+JOBNAME=bns
 
 # Movie encoding (passed to make_movies.sh)
 MOVIE_FPS=10        # frames per second
@@ -102,29 +85,11 @@ SECTIONS=(
 )
 # ---------------------------------------------------------------------------
 
-# Load required modules on HPC systems. Comment out / replace with your own
-# environment activation (e.g. `conda activate myenv`) if not using `module`.
-#
-# Lmod's `module` is usually just a shell function defined for interactive/login
-# shells, so it is NOT available in a plain `bash BNS_all.sh` (non-interactive)
-# shell. Source Lmod's init script first so `module` works here too.
-if ! command -v module &>/dev/null; then
-    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
-                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh \
-                 /etc/profile.d/00-modulepath.sh; do
-        [[ -r "${_init}" ]] && source "${_init}" && break
-    done
-fi
-if command -v module &>/dev/null; then
-    module load python py-matplotlib py-numpy py-scipy
-    module load ffmpeg          # provides ffmpeg for make_movies.sh
-else
-    echo "WARNING: 'module' command not found; relying on the current environment."
-    echo "         Make sure python/matplotlib/numpy/scipy and ffmpeg are available."
-fi
+# (Environment already activated by load_config.sh, above.)
 
 ARGS=(--simpath "${SIMPATH}")
 [[ -n "${FIGPATH:-}"  ]] && ARGS+=(--figpath  "${FIGPATH}")
+[[ -n "${JOBNAME:-}"  ]] && ARGS+=(--jobname  "${JOBNAME}")
 [[ "${SHOW_TRACKERS}" == "false" ]] && ARGS+=(--no-trackers)
 [[ "${SKIP_EXISTING}" == "true"  ]] && ARGS+=(--skip-existing)
 [[ "${FULL_DOMAIN}"   == "true"  ]] && ARGS+=(--full-domain)

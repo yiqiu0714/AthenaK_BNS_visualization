@@ -9,11 +9,17 @@ Reads the .txt outputs from --output-dir and writes:
 
 import argparse
 import os
+import sys
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import plot_style  # central house style (repo root); see plot_style.py
+
+plot_style.use()
 
 # Unit conversions
 G       = 6.67430e-11
@@ -44,7 +50,7 @@ def plot_ejecta(adir, t_ms, radius):
     t_geo_cum, Mej_geo_cum = cumulative(Mej_rate_geo)
     t_Ber_cum, Mej_Ber_cum = cumulative(Mej_rate_Ber)
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    fig, axes = plot_style.subplots(2, 3, panel_w=5.0, panel_h=4.0)
     fig.suptitle(f'BNS SPH — Ejecta properties  (r = {radius:g} M$_\\odot$)', fontsize=13)
 
     ax = axes[0, 0]
@@ -94,6 +100,40 @@ def plot_ejecta(adir, t_ms, radius):
     print(f'Saved {out}')
 
 
+def plot_ye_theta(adir, radius):
+    """2-D angular distribution of ejecta composition (Y_e vs theta).
+
+    Reads the Mej_Ye_theta_{geo,Ber}.npy arrays; skips quietly if they are
+    absent (analysis produced before this diagnostic was added).
+    """
+    try:
+        theta = np.degrees(np.loadtxt(os.path.join(adir, 'theta_centers_2d.txt')))
+        ye    = np.loadtxt(os.path.join(adir, 'Ye_centers.txt'))
+        H_geo = np.load(os.path.join(adir, 'Mej_Ye_theta_geo.npy'))
+        H_Ber = np.load(os.path.join(adir, 'Mej_Ye_theta_Ber.npy'))
+    except (OSError, FileNotFoundError):
+        print('  [ye_theta] Mej_Ye_theta_*.npy not found; skipping '
+              '(re-run the ejecta analysis to generate it).')
+        return
+
+    fig, axes = plot_style.subplots(1, 2, panel_w=5.5, panel_h=4.2)
+    fig.suptitle(f'BNS SPH — Ejecta composition vs angle  (r = {radius:g} M$_\\odot$)',
+                 fontsize=13)
+    vmax = max(H_geo.max(), H_Ber.max()) * 1e3 or 1.0
+    for ax, H, title in ((axes[0], H_geo, 'geodesic'), (axes[1], H_Ber, 'Bernoulli')):
+        pcm = ax.pcolormesh(theta, ye, H * 1e3, cmap='viridis',
+                            vmin=0, vmax=vmax, shading='auto')
+        ax.set_xlabel(r'$\theta$ [deg]'); ax.set_ylabel(r'$Y_e$')
+        ax.set_xlim(0, 180); ax.xaxis.set_major_locator(MultipleLocator(30))
+        ax.set_ylim(0, 0.6); ax.set_title(title)
+        fig.colorbar(pcm, ax=ax, label=r'$M_\mathrm{ej}$ per bin [$10^{-3}M_\odot$]')
+
+    fig.tight_layout()
+    out = os.path.join(adir, 'fig_ejecta_ye_theta.pdf')
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    print(f'Saved {out}')
+
+
 def plot_neutrino(adir, t_ms, t_merger_ms, nu_xlabel, nu_xlim, radius):
     def load(f): return np.loadtxt(os.path.join(adir, f))
 
@@ -105,7 +145,7 @@ def plot_neutrino(adir, t_ms, t_merger_ms, nu_xlabel, nu_xlim, radius):
     Eav  = {sp: load(f'Eav_{sp}.txt')   for sp in SPECIES}
 
     # Two panels: (1) luminosity, log scale 1e51–3e54;  (2) mean energy, 0–60.
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, axes = plot_style.subplots(1, 2, panel_w=5.5, panel_h=4.2)
     fig.suptitle(f'BNS SPH — Neutrino emission  (r = {radius:g} M$_\\odot$)', fontsize=13)
 
     ax = axes[0]
@@ -165,6 +205,7 @@ def main():
 
     if not args.no_ejecta:
         plot_ejecta(adir, t_ms, args.radius)
+        plot_ye_theta(adir, args.radius)
     if not args.no_neutrino:
         plot_neutrino(adir, t_ms, t_merger_ms, nu_xlabel, nu_xlim, args.radius)
 

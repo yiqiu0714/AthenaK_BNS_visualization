@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import sys
 
 import matplotlib
 
@@ -11,6 +12,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import plot_style  # central house style (repo root); see plot_style.py
 
 from data3d import load_3d_data
 from style3d import (
@@ -104,7 +108,8 @@ def main() -> None:
         (values[ix, :, :].T, (y[0], y[-1], z[0], z[-1]), r"$y~[\mathrm{M}_\odot]$", r"$z~[\mathrm{M}_\odot]$", f"yz, x={x[ix]:.3g}"),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(9.0, 3.0), constrained_layout=False)
+    fig, axes = plt.subplots(1, 3, figsize=plot_style.figsize(1, 3, panel_w=3.0, panel_h=3.0),
+                             constrained_layout=False)
     image = None
     for ax, (arr, extent, xlabel, ylabel, title) in zip(axes, panels):
         image = ax.imshow(

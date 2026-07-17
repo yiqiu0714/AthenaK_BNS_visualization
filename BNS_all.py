@@ -40,37 +40,19 @@ from athplot.tracker import Tracker
 
 sys.path.append(_HERE)
 import athenak_units as au
+import plot_style
 
 # ---------------------------------------------------------------------------
-# Global plot style  (identical to BNS.py)
+# Global plot style — centralized in plot_style.py (single source of truth).
+# Size items are per-panel constants; figure size scales with the subplot grid
+# via plot_style.figsize(nrows, ncols).
 # ---------------------------------------------------------------------------
+plot_style.use()
+FIGSIZE = plot_style.figsize()
 
-mpl.rcParams.update({
-    'lines.markersize': 6,
-    'font.family': 'serif',
-    'font.size': 10.0,
-    'text.usetex': False,
-    'axes.labelsize': 'large',
-    'xtick.major.size': 10,
-    'xtick.minor.size': 6,
-    'xtick.minor.visible': True,
-    'xtick.labelsize': 'large',
-    'xtick.direction': 'in',
-    'xtick.top': True,
-    'ytick.major.size': 10,
-    'ytick.minor.size': 6,
-    'ytick.minor.visible': True,
-    'ytick.labelsize': 'large',
-    'ytick.direction': 'in',
-    'ytick.right': True,
-    'legend.numpoints': 1,
-    'legend.fontsize': 'medium',
-    'legend.frameon': False,
-    'legend.scatterpoints': 1,
-    'figure.figsize': (5, 3),
-})
-
-FIGSIZE = (5, 3)
+# AthenaK job name prefixing every input/output file (bns.*, bns_frame_*, ...).
+# Overridden by --jobname in main() so one driver serves BNS/BHNS/BBH runs.
+JOBNAME = "bns"
 
 # Spatial coordinate grid is in geometrized M_sun units (G=c=M_sun=1),
 # 1 code length = G*M_sun/c^2 = 1.476955 km.  Field values are rescaled by
@@ -316,7 +298,7 @@ def load_trackers_all(output_dirs):
     for k in (0, 1):
         times_list, x_list, y_list = [], [], []
         for d in output_dirs:
-            fpath = os.path.join(d, f"bns.co_{k}.txt")
+            fpath = os.path.join(d, f"{JOBNAME}.co_{k}.txt")
             if os.path.exists(fpath):
                 try:
                     t = Tracker(fpath)
@@ -354,37 +336,37 @@ def load_trackers_all(output_dirs):
 
 def plot_history_all(output_dirs, figpath):
     """Baryonic mass and Hamiltonian constraint norm across all segments."""
-    mhd = combine_hst(output_dirs, "bns.mhd.hst")
+    mhd = combine_hst(output_dirs, f"{JOBNAME}.mhd.hst")
     if mhd is not None:
         fig, ax = plt.subplots(figsize=FIGSIZE, constrained_layout=True)
         ax.plot(mhd[:, 0], mhd[:, 2])
         ax.set_xlabel("t (Msun)")
         ax.set_ylabel("Baryonic mass")
-        fig.savefig(os.path.join(figpath, "bns_history_mass.png"), dpi=150)
+        fig.savefig(os.path.join(figpath, f"{JOBNAME}_history_mass.png"), dpi=150)
         plt.close(fig)
-        print("  Saved bns_history_mass.png")
+        print(f"  Saved {JOBNAME}_history_mass.png")
     else:
-        print("  Skipping mass history: no bns.mhd.hst found")
+        print(f"  Skipping mass history: no {JOBNAME}.mhd.hst found")
 
-    z4c = combine_hst(output_dirs, "bns.z4c.user.hst")
+    z4c = combine_hst(output_dirs, f"{JOBNAME}.z4c.user.hst")
     if z4c is not None:
         fig, ax = plt.subplots(figsize=FIGSIZE, constrained_layout=True)
         ax.plot(z4c[:, 0], z4c[:, 3])
         ax.set_xlabel("t (Msun)")
         ax.set_ylabel("H-norm2")
         ax.set_yscale("log")
-        fig.savefig(os.path.join(figpath, "bns_history_hnorm2.png"), dpi=150)
+        fig.savefig(os.path.join(figpath, f"{JOBNAME}_history_hnorm2.png"), dpi=150)
         plt.close(fig)
-        print("  Saved bns_history_hnorm2.png")
+        print(f"  Saved {JOBNAME}_history_hnorm2.png")
     else:
-        print("  Skipping H-norm2: no bns.z4c.user.hst found")
+        print(f"  Skipping H-norm2: no {JOBNAME}.z4c.user.hst found")
 
 
 def plot_user_history_all(output_dirs, figpath):
     """Max density and min lapse from bns.user.hst across all segments."""
-    d = combine_hst(output_dirs, "bns.user.hst")
+    d = combine_hst(output_dirs, f"{JOBNAME}.user.hst")
     if d is None:
-        print("  Skipping user history: no bns.user.hst found")
+        print(f"  Skipping user history: no {JOBNAME}.user.hst found")
         return
 
     time_u   = d[:, 0]
@@ -395,17 +377,17 @@ def plot_user_history_all(output_dirs, figpath):
     ax.plot(time_u, rho_max)
     ax.set_xlabel("t (Msun)")
     ax.set_ylabel(r"$\rho_\mathrm{max}$")
-    fig.savefig(os.path.join(figpath, "bns_user_rho_max.png"), dpi=150)
+    fig.savefig(os.path.join(figpath, f"{JOBNAME}_user_rho_max.png"), dpi=150)
     plt.close(fig)
-    print("  Saved bns_user_rho_max.png")
+    print(f"  Saved {JOBNAME}_user_rho_max.png")
 
     fig, ax = plt.subplots(figsize=FIGSIZE, constrained_layout=True)
     ax.plot(time_u, alph_min)
     ax.set_xlabel("t (Msun)")
     ax.set_ylabel(r"$\alpha_\mathrm{min}$")
-    fig.savefig(os.path.join(figpath, "bns_user_alpha_min.png"), dpi=150)
+    fig.savefig(os.path.join(figpath, f"{JOBNAME}_user_alpha_min.png"), dpi=150)
     plt.close(fig)
-    print("  Saved bns_user_alpha_min.png")
+    print(f"  Saved {JOBNAME}_user_alpha_min.png")
 
 
 def plot_tracker_trajectories_all(output_dirs, figpath,
@@ -437,9 +419,9 @@ def plot_tracker_trajectories_all(output_dirs, figpath,
     ax.set_ylabel(rf"$y~[{coord_label}]$")
     ax.set_aspect("equal")
     ax.legend()
-    fig.savefig(os.path.join(figpath, "bns_tracker_trajectories.png"), dpi=150)
+    fig.savefig(os.path.join(figpath, f"{JOBNAME}_tracker_trajectories.png"), dpi=150)
     plt.close(fig)
-    print("  Saved bns_tracker_trajectories.png")
+    print(f"  Saved {JOBNAME}_tracker_trajectories.png")
 
 
 def _parse_run_speed_log(logfile):
@@ -508,9 +490,9 @@ def plot_run_speed_all(output_dirs, figpath):
     ax.plot(sim_time, speed)
     ax.set_xlabel("Simulation time (Msun)")
     ax.set_ylabel("Cycles / wall-second")
-    fig.savefig(os.path.join(figpath, "bns_run_speed.png"), dpi=150)
+    fig.savefig(os.path.join(figpath, f"{JOBNAME}_run_speed.png"), dpi=150)
     plt.close(fig)
-    print("  Saved bns_run_speed.png")
+    print(f"  Saved {JOBNAME}_run_speed.png")
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +563,7 @@ def _render_frame_worker_all(kw):
         print_stats(data_xy, var_name)
 
     if data_xz is not None:
-        fig = plt.figure(figsize=(4.5, 6))
+        fig = plt.figure(figsize=plot_style.figsize(2, 1, panel_w=4.5, panel_h=3.0))
         gs = fig.add_gridspec(2, 1, height_ratios=[1, 2], hspace=0.03, right=0.83)
         ax_xz = fig.add_subplot(gs[0])
         ax_xy = fig.add_subplot(gs[1], sharex=ax_xz)
@@ -670,7 +652,13 @@ def render_frames_all(output_dirs, figpath, file_prefix, var_name,
         return
 
     if out_prefix is None:
-        out_prefix = f"bns_frame_{var_name.replace(':', '_')}"
+        out_prefix = f"{JOBNAME}_frame_{var_name.replace(':', '_')}"
+
+    # Each frame series gets its own subfolder <name>_xy, so make_movies.sh can
+    # build exactly one movie per folder.
+    _name = out_prefix.split("_frame_", 1)[-1] if "_frame_" in out_prefix else out_prefix
+    figpath = os.path.join(figpath, f"{_name}_xy")
+    os.makedirs(figpath, exist_ok=True)
 
     if skip_existing:
         frames = [(gi, xy, xz) for gi, xy, xz in frames
@@ -739,7 +727,7 @@ def _render_avg_energy_worker_all(kw):
     avg_energy_label = kw.get('avg_energy_label', "Average energy (code units)")
     avg_energy_norm  = kw.get('avg_energy_norm', LogNorm(vmin=1e-4, vmax=1e-3))
     species          = kw.get('species', 0)
-    out_prefix       = kw.get('out_prefix', 'bns_frame_avg_energy')
+    out_prefix       = kw.get('out_prefix', f'{JOBNAME}_frame_avg_energy')
     coord_scale      = kw.get('coord_scale', 1.0)
     coord_label      = kw.get('coord_label', r"\mathrm{M}_\odot")
 
@@ -772,7 +760,7 @@ def _render_avg_energy_worker_all(kw):
             data_xz = None
 
     if data_xz is not None:
-        fig = plt.figure(figsize=(4.5, 6))
+        fig = plt.figure(figsize=plot_style.figsize(2, 1, panel_w=4.5, panel_h=3.0))
         gs = fig.add_gridspec(2, 1, height_ratios=[1, 2], hspace=0.03, right=0.83)
         ax_xz = fig.add_subplot(gs[0])
         ax_xy = fig.add_subplot(gs[1], sharex=ax_xz)
@@ -836,7 +824,7 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
                           show_trackers=True, show_refinement=True,
                           trackers=None, xlim=(-60, 60), ylim=(-60, 60),
                           units='code', species=0,
-                          out_prefix='bns_frame_avg_energy',
+                          out_prefix=f'{JOBNAME}_frame_avg_energy',
                           var_key='avg_energy',
                           coord_scale=1.0,
                           coord_label=r"\mathrm{M}_\odot"):
@@ -846,8 +834,8 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
     """
     _sc, _lb, _log, _lo, _hi = au.plot_params(var_key, units)
     _norm = LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi)
-    n_prefix = _detect_prefix_all(output_dirs, "bns.rad_N_xy", "bns.rad_m1_N")
-    e_prefix = _detect_prefix_all(output_dirs, "bns.rad_E_xy", "bns.rad_m1_E")
+    n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_N_xy", f"{JOBNAME}.rad_m1_N")
+    e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_E_xy", f"{JOBNAME}.rad_m1_E")
 
     t_to_n = _collect_frames_by_time(output_dirs, n_prefix)
     t_to_e = _collect_frames_by_time(output_dirs, e_prefix)
@@ -860,6 +848,11 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
     if not common_times:
         print("  No matching N/E frame pairs found for avg_energy")
         return
+
+    # Per-series subfolder <name>_xy (one movie per folder in make_movies.sh).
+    _name = out_prefix.split("_frame_", 1)[-1] if "_frame_" in out_prefix else out_prefix
+    figpath = os.path.join(figpath, f"{_name}_xy")
+    os.makedirs(figpath, exist_ok=True)
 
     zlim = (0, ylim[1]) if ylim is not None else (0, None)
     worker_args = [
@@ -910,7 +903,7 @@ def _compute_s00_avg_worker_fpath(fpath):
     return (data.time, total_sum / total_area)
 
 
-def plot_s00_timeseries_all(output_dirs, figpath, file_prefix="bns.prim_xy"):
+def plot_s00_timeseries_all(output_dirs, figpath, file_prefix=f"{JOBNAME}.prim_xy"):
     """Compute and plot the area-weighted average Y_e (s_00) vs time across all segments.
 
     Collects all bns.prim_xy frames across output-XXXX subdirs (deduplicated by
@@ -940,9 +933,9 @@ def plot_s00_timeseries_all(output_dirs, figpath, file_prefix="bns.prim_xy"):
     ax.plot(times, avg_ye)
     ax.set_xlabel("t (Msun)")
     ax.set_ylabel(r"$\langle Y_e \rangle$")
-    fig.savefig(os.path.join(figpath, "bns_avg_s00_timeseries.png"), dpi=150)
+    fig.savefig(os.path.join(figpath, f"{JOBNAME}_avg_s00_timeseries.png"), dpi=150)
     plt.close(fig)
-    print(f"  Saved bns_avg_s00_timeseries.png ({len(times)} frames)")
+    print(f"  Saved {JOBNAME}_avg_s00_timeseries.png ({len(times)} frames)")
 
 
 def _compute_bmax_worker_fpath(fpath):
@@ -979,7 +972,7 @@ def _compute_bmax_worker_fpath(fpath):
 
 
 def plot_bmax_timeseries_all(output_dirs, figpath, units='cgs',
-                             file_prefix="bns.prim3D"):
+                             file_prefix=f"{JOBNAME}.prim3D"):
     """Track the global maximum |B| and its location vs time across all segments.
 
     Reads the 3-D primitive files (which carry bcc1/bcc2/bcc3), finds the global
@@ -1020,21 +1013,21 @@ def plot_bmax_timeseries_all(output_dirs, figpath, units='cgs',
     b_unit  = "code" if is_code else "G"
     xyz_unit = "Msun" if is_code else "km"
 
-    dat_path = os.path.join(figpath, "bns_bmax_vs_time.dat")
+    dat_path = os.path.join(figpath, f"{JOBNAME}_bmax_vs_time.dat")
     header = (f"t [{t_unit}]    Bmax [{b_unit}]    "
               f"x [{xyz_unit}]    y [{xyz_unit}]    z [{xyz_unit}]")
     np.savetxt(dat_path, np.column_stack([t_out, b_out, x_out, y_out, z_out]),
                header=header)
-    print(f"  Saved bns_bmax_vs_time.dat ({len(t)} frames)")
+    print(f"  Saved {JOBNAME}_bmax_vs_time.dat ({len(t)} frames)")
 
     fig, ax = plt.subplots(figsize=FIGSIZE, constrained_layout=True)
     ax.plot(t_out, b_out)
     ax.set_xlabel(f"t ({t_unit})")
     ax.set_ylabel(rf"$|B|_\mathrm{{max}}$ ({b_unit})")
     ax.set_yscale("log")
-    fig.savefig(os.path.join(figpath, "bns_bmax.png"), dpi=150)
+    fig.savefig(os.path.join(figpath, f"{JOBNAME}_bmax.png"), dpi=150)
     plt.close(fig)
-    print("  Saved bns_bmax.png")
+    print(f"  Saved {JOBNAME}_bmax.png")
 
 
 # ---------------------------------------------------------------------------
@@ -1050,6 +1043,9 @@ def parse_args():
                         help="Parent simulation directory containing output-XXXX subdirs")
     parser.add_argument("--figpath", default=None,
                         help="Output figure directory (default: <simpath>/Figs)")
+    parser.add_argument("--jobname", default="bns",
+                        help="AthenaK job name prefixing all input/output files "
+                             "(default: bns); set to bhns/bbh/... for other systems")
     parser.add_argument("--no-trackers", dest="no_trackers", action="store_true",
                         help="Disable tracker overlays on all 2-D slice plots")
     parser.add_argument("--full-domain", dest="full_domain", action="store_true",
@@ -1078,7 +1074,9 @@ def parse_args():
 
 
 def main():
+    global JOBNAME
     args    = parse_args()
+    JOBNAME = args.jobname
     simpath = args.simpath
     figpath = args.figpath or os.path.join(simpath, "Figs")
     sections = set(args.sections)
@@ -1113,12 +1111,12 @@ def main():
     trackers = load_trackers_all(output_dirs)
 
     # Auto-detect radiation file prefix scheme (new: bns.rad_E_xy, old: bns.rad_m1_E)
-    _RAD_E = _detect_prefix_all(output_dirs, "bns.rad_E_xy",   "bns.rad_m1_E")
-    _RAD_N = _detect_prefix_all(output_dirs, "bns.rad_N_xy",   "bns.rad_m1_N")
-    _ABS_0 = _detect_prefix_all(output_dirs, "bns.abs_0_xy",   "bns.rad_m1_abs_0")
-    _ABS_1 = _detect_prefix_all(output_dirs, "bns.abs_1_xy",   "bns.rad_m1_abs_1")
-    _ETA_0 = _detect_prefix_all(output_dirs, "bns.eta_0_xy",   "bns.rad_m1_eta_0")
-    _ETA_1 = _detect_prefix_all(output_dirs, "bns.eta_1_xy",   "bns.rad_m1_eta_1")
+    _RAD_E = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_E_xy",   f"{JOBNAME}.rad_m1_E")
+    _RAD_N = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_N_xy",   f"{JOBNAME}.rad_m1_N")
+    _ABS_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.abs_0_xy",   f"{JOBNAME}.rad_m1_abs_0")
+    _ABS_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.abs_1_xy",   f"{JOBNAME}.rad_m1_abs_1")
+    _ETA_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.eta_0_xy",   f"{JOBNAME}.rad_m1_eta_0")
+    _ETA_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.eta_1_xy",   f"{JOBNAME}.rad_m1_eta_1")
 
     XY_LIM = None if full_domain else (-60, 60)
 
@@ -1143,11 +1141,11 @@ def main():
         print("[density] Rendering density frames...")
         _sc, _lb, _log, _lo, _hi = au.plot_params('dens', units)
         render_frames_all(output_dirs, figpath,
-                          file_prefix="bns.prim_xy", var_name="dens",
+                          file_prefix=f"{JOBNAME}.prim_xy", var_name="dens",
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
                           label=_lb,
-                          out_prefix="bns_frame_dens",
+                          out_prefix=f"{JOBNAME}_frame_dens",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=False,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1159,10 +1157,10 @@ def main():
         print("[temperature] Rendering temperature frames...")
         _sc, _lb, _log, _lo, _hi = au.plot_params('temperature', units)
         render_frames_all(output_dirs, figpath,
-                          file_prefix="bns.prim_xy", var_name="temperature",
+                          file_prefix=f"{JOBNAME}.prim_xy", var_name="temperature",
                           cmap="viridis", vmin=0.0, vmax=70.0,
                           label=_lb,
-                          out_prefix="bns_frame_temperature",
+                          out_prefix=f"{JOBNAME}_frame_temperature",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1173,9 +1171,9 @@ def main():
         print("[s00] Rendering s_00 (Ye proxy) frames...")
         _sc, _lb, _log, _lo, _hi = au.plot_params('s_00', units)
         render_frames_all(output_dirs, figpath,
-                          file_prefix="bns.prim_xy", var_name="s_00",
+                          file_prefix=f"{JOBNAME}.prim_xy", var_name="s_00",
                           cmap="plasma", vmin=0.0, vmax=0.2,
-                          label=_lb, out_prefix="bns_frame_s00",
+                          label=_lb, out_prefix=f"{JOBNAME}_frame_s00",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1186,10 +1184,10 @@ def main():
         print("[bnorm] Rendering magnetic field magnitude |B| frames...")
         _sc, _lb, _log, _lo, _hi = au.plot_params('bmag', units)
         render_frames_all(output_dirs, figpath,
-                          file_prefix="bns.prim_xy", var_name="derived:bmag",
+                          file_prefix=f"{JOBNAME}.prim_xy", var_name="derived:bmag",
                           cmap="plasma",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
-                          label=_lb, out_prefix="bns_frame_bmag",
+                          label=_lb, out_prefix=f"{JOBNAME}_frame_bmag",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1203,7 +1201,7 @@ def main():
     if enabled("bmax"):
         print("[bmax] Computing global max |B| time series...")
         plot_bmax_timeseries_all(output_dirs, figpath, units=units,
-                                 file_prefix="bns.prim3D")
+                                 file_prefix=f"{JOBNAME}.prim3D")
 
     if enabled("rad_E"):
         print("[rad_E] Rendering radiation energy E:0 frames...")
@@ -1212,7 +1210,7 @@ def main():
                           file_prefix=_RAD_E, var_name="E:0",
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
-                          label=_lb, out_prefix="bns_frame_rad_E0",
+                          label=_lb, out_prefix=f"{JOBNAME}_frame_rad_E0",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1226,7 +1224,7 @@ def main():
                           file_prefix=_RAD_N, var_name="N:0",
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
-                          label=_lb, out_prefix="bns_frame_rad_N0",
+                          label=_lb, out_prefix=f"{JOBNAME}_frame_rad_N0",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1240,7 +1238,7 @@ def main():
                           file_prefix=_RAD_N, var_name="N:2",
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
-                          label=_lb, out_prefix="bns_frame_rad_N2",
+                          label=_lb, out_prefix=f"{JOBNAME}_frame_rad_N2",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1255,7 +1253,7 @@ def main():
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
                           label=_lb,
-                          out_prefix="bns_frame_abs1_0",
+                          out_prefix=f"{JOBNAME}_frame_abs1_0",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1270,7 +1268,7 @@ def main():
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
                           label=_lb,
-                          out_prefix="bns_frame_abs0_0",
+                          out_prefix=f"{JOBNAME}_frame_abs0_0",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1285,7 +1283,7 @@ def main():
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
                           label=_lb,
-                          out_prefix="bns_frame_eta0_0",
+                          out_prefix=f"{JOBNAME}_frame_eta0_0",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1300,7 +1298,7 @@ def main():
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
                           label=_lb,
-                          out_prefix="bns_frame_eta1_0",
+                          out_prefix=f"{JOBNAME}_frame_eta1_0",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1311,10 +1309,10 @@ def main():
         print("[z4c] Rendering con_H (Hamiltonian constraint) frames...")
         _sc, _lb, _log, _lo, _hi = au.plot_params('con_H', units)
         render_frames_all(output_dirs, figpath,
-                          file_prefix="bns.con_xy", var_name="con_H",
+                          file_prefix=f"{JOBNAME}.con_xy", var_name="con_H",
                           cmap="inferno",
                           norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
-                          label=_lb, out_prefix="bns_frame_con_H",
+                          label=_lb, out_prefix=f"{JOBNAME}_frame_con_H",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
@@ -1324,7 +1322,7 @@ def main():
 
     if enabled("s00_avg"):
         print("[s00_avg] Computing average Y_e (s_00) time series...")
-        plot_s00_timeseries_all(output_dirs, figpath, file_prefix="bns.prim_xy")
+        plot_s00_timeseries_all(output_dirs, figpath, file_prefix=f"{JOBNAME}.prim_xy")
 
     if enabled("avg_energy"):
         print("[avg_energy] Rendering average neutrino energy frames...")
@@ -1346,7 +1344,7 @@ def main():
                                   show_trackers=show_trackers, show_refinement=True,
                                   trackers=trackers, xlim=XY_LIM, ylim=XY_LIM,
                                   units=units, species=_sp,
-                                  out_prefix=f"bns_frame_{_sec}",
+                                  out_prefix=f"{JOBNAME}_frame_{_sec}",
                                   var_key='nu_energy',
                                   coord_scale=coord_scale, coord_label=coord_label)
 

@@ -82,32 +82,24 @@ def convert_fields(fields: Dict[str, np.ndarray], units: str = "code") -> None:
 
 
 def apply_bns_matplotlib_style() -> None:
-    """Apply the compact Matplotlib style used by BNS_all.py."""
-    import matplotlib as mpl
-    mpl.rcParams.update({
-        "lines.markersize": 6,
-        "font.family": "serif",
-        "font.size": 10.0,
-        "text.usetex": False,
-        "axes.labelsize": "large",
-        "xtick.major.size": 10,
-        "xtick.minor.size": 6,
-        "xtick.minor.visible": True,
-        "xtick.labelsize": "large",
-        "xtick.direction": "in",
-        "xtick.top": True,
-        "ytick.major.size": 10,
-        "ytick.minor.size": 6,
-        "ytick.minor.visible": True,
-        "ytick.labelsize": "large",
-        "ytick.direction": "in",
-        "ytick.right": True,
-        "legend.numpoints": 1,
-        "legend.fontsize": "medium",
-        "legend.frameon": False,
-        "legend.scatterpoints": 1,
-        "figure.figsize": FIGSIZE,
-    })
+    """Apply the central BNS house style (see repo-root plot_style.py).
+
+    Delegates to plot_style so the look is defined in one place; falls back to
+    a minimal inline style if plot_style is not importable.
+    """
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        import plot_style
+        plot_style.use(panel_w=FIGSIZE[0], panel_h=FIGSIZE[1])
+    except ImportError:
+        import matplotlib as mpl
+        mpl.rcParams.update({
+            "font.family": "serif",
+            "font.size": 16.0,
+            "figure.figsize": FIGSIZE,
+        })
 
 
 def parse_csv_floats(value: Optional[str]) -> Optional[Tuple[float, ...]]:

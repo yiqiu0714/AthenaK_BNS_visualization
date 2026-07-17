@@ -3,9 +3,9 @@
 # run_analysis.sh  —  BNS SPH ejecta + neutrino analysis wrapper
 #
 # Usage:
-#   bash run_analysis.sh [--ejecta] [--neutrino] [--plot] [--all]
+#   bash run_analysis.sh [--ejecta] [--neutrino] [--plot] [--accretion] [--all]
 #
-# With no flags all steps (merger time, ejecta, neutrino, plot) are run.
+# With no flags all steps (merger time, ejecta, neutrino, plot, accretion) run.
 #
 # Machine-specific PATHS (simpath, eos_table, optional pythonpath_extra) are read
 # from ../config.ini.  The run settings below stay in this script — edit per run.
@@ -18,30 +18,9 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_FILE="${REPO_DIR}/config.ini"
 PLOTTOOLS="${REPO_DIR}/plot-tools"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Read paths from config.ini  (plain INI: parsed, never executed)
-# ─────────────────────────────────────────────────────────────────────────────
-if [[ ! -f "${CONFIG_FILE}" ]]; then
-    echo "ERROR: ${CONFIG_FILE} not found."
-    echo "       Copy config.example.ini to config.ini and set 'simpath' + 'eos_table'."
-    exit 1
-fi
-
-_cfg_get() {
-    awk -v key="$1" '
-        /^[[:space:]]*[#;]/ { next }
-        /^[[:space:]]*\[/   { next }
-        {
-            k = $0; sub(/=.*/, "", k)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
-            if (k == key && index($0, "=")) {
-                v = substr($0, index($0, "=") + 1)
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-                print v; exit
-            }
-        }
-    ' "${CONFIG_FILE}"
-}
+# All machine-specific settings (paths + environment) come from config.ini.
+# load_config.sh reads it, defines _cfg_get, and activates the environment.
+source "${REPO_DIR}/load_config.sh"
 
 SIMPATH="$(_cfg_get simpath)"
 EOS_TABLE="$(_cfg_get eos_table)"
@@ -58,9 +37,15 @@ fi
 # Directory where all output txt/npy/pdf files will be written.
 OUTPUT_DIR="${SIMPATH}/analysis"
 
+# AthenaK job name prefixing the .hst files (used by the accretion step).
+JOBNAME=bns
+
 # SPH extraction radius [M_sun] used for BOTH ejecta and neutrino analysis.
 # Must have mhd/adm/z4c and rad_m1_E/F/N sph output at this radius.
 RADIUS=300.0
+
+# Ejecta criterion the accretion step uses ('geo' or 'Ber').
+ACCR_CRIT=Ber
 
 # GW extraction radius for the merger-time estimate (rpsi4_*_RRRR.txt).
 WF_RADIUS=300
@@ -90,34 +75,24 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # ARG PARSING
 # ─────────────────────────────────────────────────────────────────────────────
-RUN_EJECTA=0; RUN_NEUTRINO=0; RUN_PLOT=0
+RUN_EJECTA=0; RUN_NEUTRINO=0; RUN_PLOT=0; RUN_ACCRETION=0
 if [[ $# -eq 0 ]]; then
-    RUN_EJECTA=1; RUN_NEUTRINO=1; RUN_PLOT=1
+    RUN_EJECTA=1; RUN_NEUTRINO=1; RUN_PLOT=1; RUN_ACCRETION=1
 fi
 for arg in "$@"; do
     case "$arg" in
-        --ejecta)   RUN_EJECTA=1   ;;
-        --neutrino) RUN_NEUTRINO=1 ;;
-        --plot)     RUN_PLOT=1     ;;
-        --all)      RUN_EJECTA=1; RUN_NEUTRINO=1; RUN_PLOT=1 ;;
-        *) echo "Unknown flag: $arg"; echo "Usage: $0 [--ejecta] [--neutrino] [--plot] [--all]"; exit 1 ;;
+        --ejecta)    RUN_EJECTA=1    ;;
+        --neutrino)  RUN_NEUTRINO=1  ;;
+        --plot)      RUN_PLOT=1      ;;
+        --accretion) RUN_ACCRETION=1 ;;
+        --all)       RUN_EJECTA=1; RUN_NEUTRINO=1; RUN_PLOT=1; RUN_ACCRETION=1 ;;
+        *) echo "Unknown flag: $arg"; echo "Usage: $0 [--ejecta] [--neutrino] [--plot] [--accretion] [--all]"; exit 1 ;;
     esac
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SETUP
+# SETUP  — environment already activated by load_config.sh (config.ini env_setup)
 # ─────────────────────────────────────────────────────────────────────────────
-# Aurora uses environment modules. Lmod's `module` is usually only a shell
-# function for interactive shells, so source its init first if needed.
-if ! command -v module &>/dev/null; then
-    for _init in "${MODULESHOME:-/usr/share/lmod/lmod}/init/bash" \
-                 /etc/profile.d/lmod.sh /etc/profile.d/z00_lmod.sh; do
-        [[ -r "${_init}" ]] && source "${_init}" && break
-    done
-fi
-if command -v module &>/dev/null; then
-    module load python py-numpy py-scipy py-matplotlib py-h5py
-fi
 # The module Python may have no pip/user-site; provide extra packages (e.g. vtk
 # needed by athplot.load_sph_vtk) via pythonpath_extra in config.ini.
 if [[ -n "${PYTHONPATH_EXTRA}" ]]; then
@@ -219,6 +194,25 @@ if [[ $RUN_PLOT -eq 1 ]]; then
     [[ "${PLOT_FROM_MERGER}" == "1" ]] && PLOT_ARGS+=(--from-merger)
     python3 "${SCRIPT_DIR}/plot_analysis.py" "${PLOT_ARGS[@]}"
     echo "── Plotting done ────────────────────────────────────────────"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 4: ACCRETION  (post-merger accretion rate from baryon bookkeeping)
+# Needs the ejecta outputs (Mej_rate_*/vinf_avg_*) — run ejecta first, or in the
+# same invocation (they are produced above).
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ $RUN_ACCRETION -eq 1 ]]; then
+    echo ""
+    echo "── Accretion rate (baryon bookkeeping) ──────────────────────"
+    if [[ -f "${OUTPUT_DIR}/Mej_rate_${ACCR_CRIT}.txt" ]]; then
+        python3 "${SCRIPT_DIR}/analyze_accretion.py" \
+            --simpath "${SIMPATH}" --analysis-dir "${OUTPUT_DIR}" \
+            --jobname "${JOBNAME}" --r-ej "${RADIUS}" --crit "${ACCR_CRIT}"
+        echo "── Accretion done ───────────────────────────────────────────"
+    else
+        echo "  Skipping: ${OUTPUT_DIR}/Mej_rate_${ACCR_CRIT}.txt not found."
+        echo "  Run the ejecta step first (bash run_analysis.sh --ejecta)."
+    fi
 fi
 
 echo ""
