@@ -1174,7 +1174,7 @@ def main():
         _sc, _lb, _log, _lo, _hi = au.plot_params('s_00', units)
         render_frames_all(output_dirs, figpath,
                           file_prefix="bns.prim_xy", var_name="s_00",
-                          cmap="plasma", vmin=0.0, vmax=0.2,
+                          cmap="plasma", vmin=0.0, vmax=0.5,
                           label=_lb, out_prefix="bns_frame_s00",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
