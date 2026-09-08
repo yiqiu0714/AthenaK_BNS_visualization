@@ -64,15 +64,16 @@ SECTIONS=(
     # trackers      # NS trajectory plot (both stars, smoothed)
     run_speed     # AthenaK cycles/sec from log file
 
-    density       # density (dens) slice frames  [+ trackers + AMR grid]
-    temperature   # temperature slice frames      [+ trackers + AMR grid]
-    s00           # electron fraction (s_00) frames
+    # density       # density (dens) slice frames  [+ trackers + AMR grid]
+    # temperature   # temperature slice frames      [+ trackers + AMR grid]
+    # s00           # electron fraction (s_00) frames
     # s00_avg       # area-weighted average Y_e vs time (1-D timeseries)
-    bnorm         # magnetic field magnitude |B| slice frames   [bns.prim_xy bcc1-3]
-    bmax          # global max |B| & location vs time (1-D timeseries) [bns.prim3D]
-    z4c
-    rad_E         # radiation energy E:0 frames          [bns.rad_m1_E]
-    rad_N         # radiation number density N:0 frames  [bns.rad_m1_N]
+    # bnorm         # magnetic field magnitude |B| slice frames   [bns.prim_xy bcc1-3]
+    # bmax          # global max |B| & location vs time (1-D timeseries) [bns.prim3D]
+    # z4c
+    # rad_E         # radiation energy E:0 frames          [bns.rad_m1_E]
+    # rad_E2         # radiation energy E:0 frames          [bns.rad_m1_E]
+    # rad_N         # radiation number density N:0 frames  [bns.rad_m1_N]
     # rad_N2        # radiation number density N:2 (heavy lepton) frames
     # rad_abs       # absorption opacity abs_1:0 frames    [bns.rad_m1_abs_1]
     # rad_abs0    # absorption opacity abs_0:0 frames    [bns.rad_m1_abs_0]
@@ -82,6 +83,14 @@ SECTIONS=(
     # nu_energy   # neutrino energy E/N species 0 (ν_e)    [MeV in cgs]
     # nu_energy1  # neutrino energy E/N species 1 (ν̄_e)    [MeV in cgs]
     # nu_energy2  # neutrino energy E/N species 2 (ν_x)    [MeV in cgs]
+    # --- fluid-frame moments & bns_nurates reconstruction [need bns.rad_J / bns.rad_n] ---
+    # rad_J       # fluid-frame energy density J:0 frames  [bns.rad_J]  [MeV/nm^3 in ngs]
+    # rad_n       # fluid-frame number density n:0 frames  [bns.rad_n]  [nm^-3 in ngs]
+    # nu_avge     # fluid-frame mean energy <e>=J/n (ν_e)  [MeV]
+    # nu_y        # reconstructed degeneracy invariant y = n^4/J^3/(4π/(hc)^3)
+    # nu_eta_t    # reconstructed degeneracy η_t = μ/T (clamped at 20)
+    # nu_temp_t   # reconstructed spectral temperature T_ν (ν_e)  [MeV]
+    # nu_Ynu      # neutrino fraction per baryon Y_ν = n_ν/n_b (ν_e)  [needs bns.prim_xy]
 )
 # ---------------------------------------------------------------------------
 

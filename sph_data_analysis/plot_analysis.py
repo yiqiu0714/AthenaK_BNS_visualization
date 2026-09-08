@@ -3,8 +3,10 @@ Plot ejecta and neutrino diagnostics produced by analyze_ejecta.py and
 analyze_neutrinos.py.
 
 Reads the .txt outputs from --output-dir and writes:
-    fig_ejecta.pdf    (2x3 panel summary of the ejecta properties)
-    fig_neutrino.pdf  (2 panels: neutrino luminosity + mean energy)
+    fig_ejecta.pdf          (1x4 mass distributions: v_inf, T, Y_e, entropy)
+    fig_ejecta_time.pdf     (rate, cumulative mass, <Y_e> vs time)
+    fig_ejecta_ye_theta.pdf (2-D Y_e vs theta composition map)
+    fig_neutrino.pdf        (2 panels: neutrino luminosity + mean energy)
 """
 
 import argparse
@@ -34,68 +36,97 @@ def cumulative(arr):
 
 
 def plot_ejecta(adir, t_ms, radius):
+    """Ejecta mass distributions vs v_inf, temperature, Y_e, and entropy.
+
+    One row of four panels; the y-axis is ejected mass per bin [M_sun] on a log
+    scale fixed to 1e-6 .. 1e-2, with the geodesic and Bernoulli criteria
+    overlaid.
+    """
+    def load(f): return np.loadtxt(os.path.join(adir, f))
+
+    # (geo file, Ber file, x-label, fixed xlim or None -> auto to populated bins,
+    #  panel title, optional vertical guide line)
+    panels = [
+        ('Mej_vinf_geo.txt', 'Mej_vinf_Ber.txt',
+         r'$v_\infty$ [$c$]', (0, 0.8), 'Velocity', None),
+        ('Mej_T_geo.txt', 'Mej_T_Ber.txt',
+         r'$T$ [MeV]', None, 'Temperature', None),
+        ('Mej_Ye_geo.txt', 'Mej_Ye_Ber.txt',
+         r'$Y_e$', (0, 0.6), r'$Y_e$', 0.5),
+        ('Mej_s_geo.txt', 'Mej_s_Ber.txt',
+         r'$s$ [$k_B\,\mathrm{baryon}^{-1}$]', None, 'Entropy', None),
+    ]
+
+    fig, axes = plot_style.subplots(1, 4, panel_w=4.2, panel_h=4.0)
+    fig.suptitle(f'BNS SPH — Ejecta mass distributions  (r = {radius:g} M$_\\odot$)',
+                 fontsize=13)
+
+    for ax, (fgeo, fber, xlabel, xlim, title, vline) in zip(axes, panels):
+        geo = load(fgeo); ber = load(fber)
+        ax.step(geo[:, 0], geo[:, 1], color='tab:blue', where='mid',
+                lw=1.2, label='geodesic')
+        ax.step(ber[:, 0], ber[:, 1], color='tab:orange', ls='--', where='mid',
+                lw=1.2, label='Bernoulli')
+        if vline is not None:
+            ax.axvline(vline, color='gray', ls=':', lw=0.8)
+        ax.set_yscale('log')
+        ax.set_ylim(1e-6, 1e-2)
+        ax.set_xlabel(xlabel)
+        ax.set_title(title)
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+        else:
+            # auto-focus on the populated bins (both criteria)
+            nz = np.where((geo[:, 1] > 0) | (ber[:, 1] > 0))[0]
+            ax.set_xlim(0, geo[nz[-1], 0] * 1.1 if len(nz) else geo[-1, 0])
+
+    axes[0].set_ylabel(r'$M_\mathrm{ej}$ per bin  [$M_\odot$]')
+    axes[0].legend(fontsize=9)
+
+    fig.tight_layout()
+    out = os.path.join(adir, 'fig_ejecta.pdf')
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    print(f'Saved {out}')
+
+
+def plot_ejecta_time(adir, t_ms, radius):
+    """Time evolution of the ejecta: mass-ejection rate, cumulative mass, and
+    mass-weighted <Y_e> (geodesic vs Bernoulli).  Kept separate from the
+    distribution figure (fig_ejecta.pdf)."""
     def load(f): return np.loadtxt(os.path.join(adir, f))
 
     Mej_rate_geo = load('Mej_rate_geo.txt')
     Mej_rate_Ber = load('Mej_rate_Ber.txt')
-    Mej_vinf_geo = load('Mej_vinf_geo.txt')
-    Mej_vinf_Ber = load('Mej_vinf_Ber.txt')
-    rhoej_geo    = load('rhoej_theta_geo.txt')
-    rhoej_Ber    = load('rhoej_theta_Ber.txt')
     Ye_avg_geo   = load('Ye_avg_geo.txt')
     Ye_avg_Ber   = load('Ye_avg_Ber.txt')
-    Mej_Ye_geo   = load('Mej_Ye_geo.txt')
-    Mej_Ye_Ber   = load('Mej_Ye_Ber.txt')
-
     t_geo_cum, Mej_geo_cum = cumulative(Mej_rate_geo)
     t_Ber_cum, Mej_Ber_cum = cumulative(Mej_rate_Ber)
 
-    fig, axes = plot_style.subplots(2, 3, panel_w=5.0, panel_h=4.0)
-    fig.suptitle(f'BNS SPH — Ejecta properties  (r = {radius:g} M$_\\odot$)', fontsize=13)
+    fig, axes = plot_style.subplots(1, 3, panel_w=5.0, panel_h=4.0)
+    fig.suptitle(f'BNS SPH — Ejecta time evolution  (r = {radius:g} M$_\\odot$)',
+                 fontsize=13)
 
-    ax = axes[0, 0]
+    ax = axes[0]
     ax.plot(t_ms(Mej_rate_geo[:, 0]), Mej_rate_geo[:, 1] / MSUN_TO_MS * 1e3, color='tab:blue', label='geodesic', lw=1.2)
     ax.plot(t_ms(Mej_rate_Ber[:, 0]), Mej_rate_Ber[:, 1] / MSUN_TO_MS * 1e3, color='tab:orange', ls='--', label='Bernoulli', lw=1.2)
     ax.set_xlabel(r'$t - t_\mathrm{merger}$ [ms]'); ax.set_ylabel(r'$\dot{M}_\mathrm{ej}$  [$10^{-3}M_\odot\,\mathrm{ms}^{-1}$]')
     ax.legend(fontsize=9); ax.set_xlim(left=0); ax.set_title('Mass ejection rate')
 
-    ax = axes[0, 1]
+    ax = axes[1]
     ax.plot(t_ms(t_geo_cum), Mej_geo_cum * 1e3, color='tab:blue', label='geodesic', lw=1.2)
     ax.plot(t_ms(t_Ber_cum), Mej_Ber_cum * 1e3, color='tab:orange', ls='--', label='Bernoulli', lw=1.2)
     ax.set_xlabel(r'$t - t_\mathrm{merger}$ [ms]'); ax.set_ylabel(r'$M_\mathrm{ej}$  [$10^{-3}M_\odot$]')
     ax.legend(fontsize=9); ax.set_xlim(left=0); ax.set_title('Cumulative ejecta mass')
 
-    ax = axes[0, 2]
+    ax = axes[2]
     ax.plot(t_ms(Ye_avg_geo[:, 0]), Ye_avg_geo[:, 1], color='tab:blue', label='geodesic', lw=1.2)
     ax.plot(t_ms(Ye_avg_Ber[:, 0]), Ye_avg_Ber[:, 1], color='tab:orange', ls='--', label='Bernoulli', lw=1.2)
     ax.axhline(0.5, color='gray', ls=':', lw=0.8)
     ax.set_xlabel(r'$t - t_\mathrm{merger}$ [ms]'); ax.set_ylabel(r'$\langle Y_e \rangle_\mathrm{ej}$')
     ax.legend(fontsize=9); ax.set_xlim(left=0); ax.set_ylim(0, 0.6); ax.set_title(r'Mass-weighted $\langle Y_e \rangle$')
 
-    ax = axes[1, 0]
-    dv = np.diff(Mej_vinf_geo[:, 0]); dv = np.append(dv, dv[-1])
-    ax.step(Mej_vinf_geo[:, 0], Mej_vinf_geo[:, 1] / dv * 1e3, color='tab:blue', label='geodesic', lw=1.2, where='mid')
-    ax.step(Mej_vinf_Ber[:, 0], Mej_vinf_Ber[:, 1] / dv * 1e3, color='tab:orange', ls='--', label='Bernoulli', lw=1.2, where='mid')
-    ax.set_xlabel(r'$v_\infty$ [$c$]'); ax.set_ylabel(r'$dM_\mathrm{ej}/dv_\infty$  [$10^{-3}M_\odot\,c^{-1}$]')
-    ax.legend(fontsize=9); ax.set_xlim(0, 0.8); ax.set_title('Velocity distribution')
-
-    ax = axes[1, 1]
-    ax.plot(rhoej_geo[:, 0] * 180 / np.pi, rhoej_geo[:, 1] * 1e3, color='tab:blue', label='geodesic', lw=1.2)
-    ax.plot(rhoej_Ber[:, 0] * 180 / np.pi, rhoej_Ber[:, 1] * 1e3, color='tab:orange', ls='--', label='Bernoulli', lw=1.2)
-    ax.set_xlabel(r'$\theta$ [deg]'); ax.set_ylabel(r'$dM_\mathrm{ej}/d\theta$  [$10^{-3}M_\odot\,\mathrm{rad}^{-1}$]')
-    ax.set_xlim(0, 180); ax.xaxis.set_major_locator(MultipleLocator(30))
-    ax.legend(fontsize=9); ax.set_title('Angular distribution')
-
-    ax = axes[1, 2]
-    dye = np.diff(Mej_Ye_geo[:, 0]); dye = np.append(dye, dye[-1])
-    ax.step(Mej_Ye_geo[:, 0], Mej_Ye_geo[:, 1] / dye * 1e3, color='tab:blue', label='geodesic', lw=1.2, where='mid')
-    ax.step(Mej_Ye_Ber[:, 0], Mej_Ye_Ber[:, 1] / dye * 1e3, color='tab:orange', ls='--', label='Bernoulli', lw=1.2, where='mid')
-    ax.axvline(0.5, color='gray', ls=':', lw=0.8)
-    ax.set_xlabel(r'$Y_e$'); ax.set_ylabel(r'$dM_\mathrm{ej}/dY_e$  [$10^{-3}M_\odot$]')
-    ax.set_xlim(0, 0.6); ax.legend(fontsize=9); ax.set_title(r'$Y_e$ distribution')
-
     fig.tight_layout()
-    out = os.path.join(adir, 'fig_ejecta.pdf')
+    out = os.path.join(adir, 'fig_ejecta_time.pdf')
     fig.savefig(out, dpi=150, bbox_inches='tight')
     print(f'Saved {out}')
 
@@ -205,6 +236,7 @@ def main():
 
     if not args.no_ejecta:
         plot_ejecta(adir, t_ms, args.radius)
+        plot_ejecta_time(adir, t_ms, args.radius)
         plot_ye_theta(adir, args.radius)
     if not args.no_neutrino:
         plot_neutrino(adir, t_ms, t_merger_ms, nu_xlabel, nu_xlim, args.radius)

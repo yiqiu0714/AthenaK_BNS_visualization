@@ -78,6 +78,16 @@ DYE      = 0.01
 YE_BINS  = np.arange(0.0, 0.6 + DYE, DYE)
 YE_CENTERS = 0.5 * (YE_BINS[:-1] + YE_BINS[1:])
 
+# --- Temperature bins [MeV] ---
+DT_MEV   = 0.5
+T_BINS   = np.arange(0.0, 50.0 + DT_MEV, DT_MEV)
+T_CENTERS = 0.5 * (T_BINS[:-1] + T_BINS[1:])
+
+# --- Entropy-per-baryon bins [k_B] ---
+DS       = 1.0
+S_BINS   = np.arange(0.0, 100.0 + DS, DS)
+S_CENTERS = 0.5 * (S_BINS[:-1] + S_BINS[1:])
+
 # --- Data directories ---
 SPH_DIR_LIST = [os.path.join('../sim', SIM_NAME, b) for b in SPH_DIR_BASENAMES]
 
@@ -104,6 +114,7 @@ def load_eos(path):
         t_axis  = f['t'][:]          # [MeV]
         mn_mev  = float(f['mn'][()]) # neutron mass [MeV]
         Q1_grid = f['Q1'][:]         # p / nb  [MeV]
+        Q2_grid = f['Q2'][:]         # entropy per baryon [k_B]
         Q7_grid = f['Q7'][:]         # e / (nb * m_n) - 1
 
     log_nb_axis = np.log(nb_axis)
@@ -125,10 +136,15 @@ def load_eos(path):
         (log_nb_axis, yq_axis, log_t_axis), Q1_grid / mn_mev,
         method='linear', bounds_error=False, fill_value=None,
     )
+    interp_s = RegularGridInterpolator(
+        (log_nb_axis, yq_axis, log_t_axis), Q2_grid,
+        method='linear', bounds_error=False, fill_value=None,
+    )
 
     return dict(
         interp_e=interp_e,
         interp_p_rho=interp_p_rho,
+        interp_s=interp_s,
         mn_mev=mn_mev,
         h_min=h_min,
         nb_min=nb_min,
@@ -222,6 +238,7 @@ def _process_snapshot_ejecta(args):
     e_interp = eos['interp_e'](pts).reshape(input_shape)
     p_rho    = eos['interp_p_rho'](pts).reshape(input_shape)
     h        = 1.0 + e_interp + p_rho
+    entropy  = eos['interp_s'](pts).reshape(input_shape)   # per baryon [k_B]
 
     W = _np.sqrt(1.0 + gxx*velx**2 + gyy*vely**2 + gzz*velz**2
                  + 2*gxy*velx*vely + 2*gxz*velx*velz + 2*gyz*vely*velz)
@@ -300,6 +317,23 @@ def _process_snapshot_ejecta(args):
         result['hist2d_ye_theta_Ber'], _, _ = _np.histogram2d(
             ye.flatten()[sel_Ber], theta.flatten()[sel_Ber],
             bins=[YE_BINS, theta_edges],
+            weights=flux_rate_Ber.flatten()[sel_Ber],
+        )
+        # Temperature and entropy-per-baryon mass distributions
+        result['hist_T_geo'], _ = _np.histogram(
+            temperature.flatten()[sel_geo], bins=T_BINS,
+            weights=flux_rate_geo.flatten()[sel_geo],
+        )
+        result['hist_T_Ber'], _ = _np.histogram(
+            temperature.flatten()[sel_Ber], bins=T_BINS,
+            weights=flux_rate_Ber.flatten()[sel_Ber],
+        )
+        result['hist_s_geo'], _ = _np.histogram(
+            entropy.flatten()[sel_geo], bins=S_BINS,
+            weights=flux_rate_geo.flatten()[sel_geo],
+        )
+        result['hist_s_Ber'], _ = _np.histogram(
+            entropy.flatten()[sel_Ber], bins=S_BINS,
             weights=flux_rate_Ber.flatten()[sel_Ber],
         )
 
@@ -395,6 +429,10 @@ def main():
     hist_ye_Ber_arr  = np.array([r['hist_ye_Ber']  for r in res_2d])
     hist2d_ye_theta_geo_arr = np.array([r['hist2d_ye_theta_geo'] for r in res_2d])
     hist2d_ye_theta_Ber_arr = np.array([r['hist2d_ye_theta_Ber'] for r in res_2d])
+    hist_T_geo_arr   = np.array([r['hist_T_geo']   for r in res_2d])
+    hist_T_Ber_arr   = np.array([r['hist_T_Ber']   for r in res_2d])
+    hist_s_geo_arr   = np.array([r['hist_s_geo']   for r in res_2d])
+    hist_s_Ber_arr   = np.array([r['hist_s_Ber']   for r in res_2d])
 
     # ------------------------------------------------------------------
     # Post-processing
@@ -407,6 +445,11 @@ def main():
 
     dMej_ye_theta_geo = sum_over_time(hist2d_ye_theta_geo_arr, time_2d_arr)  # (NYe, Ntheta)
     dMej_ye_theta_Ber = sum_over_time(hist2d_ye_theta_Ber_arr, time_2d_arr)
+
+    dMej_T_geo = sum_over_time(hist_T_geo_arr, time_2d_arr)   # (NT,)
+    dMej_T_Ber = sum_over_time(hist_T_Ber_arr, time_2d_arr)
+    dMej_s_geo = sum_over_time(hist_s_geo_arr, time_2d_arr)   # (Ns,)
+    dMej_s_Ber = sum_over_time(hist_s_Ber_arr, time_2d_arr)
 
     # Marginals
     dMej_geo = dMej_2d_geo.sum(axis=1)          # (Nv,)  — vinf histogram
@@ -507,6 +550,26 @@ def main():
                fmt='%.6e')
     np.savetxt(os.path.join(OUTPUT_DIR, 'Ye_centers.txt'), YE_CENTERS,
                header='Ye bin centers', fmt='%.6e')
+
+    # -- Temperature distribution (dM per T-bin) --
+    np.savetxt(os.path.join(OUTPUT_DIR, 'Mej_T_geo.txt'),
+               np.column_stack((T_CENTERS, dMej_T_geo)),
+               header='T[MeV]    Mej_per_bin[Msun]  (geodesic: u_t < -1)', fmt='%.6e')
+    np.savetxt(os.path.join(OUTPUT_DIR, 'Mej_T_Ber.txt'),
+               np.column_stack((T_CENTERS, dMej_T_Ber)),
+               header='T[MeV]    Mej_per_bin[Msun]  (Bernoulli: h*u_t < -h_min)', fmt='%.6e')
+    np.savetxt(os.path.join(OUTPUT_DIR, 'T_centers.txt'), T_CENTERS,
+               header='T bin centers [MeV]', fmt='%.6e')
+
+    # -- Entropy-per-baryon distribution (dM per s-bin) --
+    np.savetxt(os.path.join(OUTPUT_DIR, 'Mej_s_geo.txt'),
+               np.column_stack((S_CENTERS, dMej_s_geo)),
+               header='s[k_B]    Mej_per_bin[Msun]  (geodesic: u_t < -1)', fmt='%.6e')
+    np.savetxt(os.path.join(OUTPUT_DIR, 'Mej_s_Ber.txt'),
+               np.column_stack((S_CENTERS, dMej_s_Ber)),
+               header='s[k_B]    Mej_per_bin[Msun]  (Bernoulli: h*u_t < -h_min)', fmt='%.6e')
+    np.savetxt(os.path.join(OUTPUT_DIR, 's_centers.txt'), S_CENTERS,
+               header='entropy-per-baryon bin centers [k_B]', fmt='%.6e')
 
     print(f'All outputs saved to {OUTPUT_DIR}')
 

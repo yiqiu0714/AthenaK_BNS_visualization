@@ -40,6 +40,7 @@ from athplot.tracker import Tracker
 
 sys.path.append(_HERE)
 import athenak_units as au
+import bns_nurates_recon as recon
 import plot_style
 
 # ---------------------------------------------------------------------------
@@ -727,6 +728,13 @@ def _render_avg_energy_worker_all(kw):
     avg_energy_label = kw.get('avg_energy_label', "Average energy (code units)")
     avg_energy_norm  = kw.get('avg_energy_norm', LogNorm(vmin=1e-4, vmax=1e-3))
     species          = kw.get('species', 0)
+    # 'avg_energy'/'nu_energy' -> E/N; else a bns_nurates_recon.DERIVED key
+    # (nu_y / nu_eta_t / nu_temp_t) whose callable already returns ngs units.
+    derived_kind     = kw.get('derived_kind', 'avg_energy')
+    # Fully-formed variable names for the (energy-role, number-role) pair, e.g.
+    # ('E:0','N:0') lab, ('J:0','n:0') fluid, ('n:0','dens') for Y_nu.
+    e_var            = kw['e_var']
+    n_var            = kw['n_var']
     out_prefix       = kw.get('out_prefix', f'{JOBNAME}_frame_avg_energy')
     coord_scale      = kw.get('coord_scale', 1.0)
     coord_label      = kw.get('coord_label', r"\mathrm{M}_\odot")
@@ -741,12 +749,13 @@ def _render_avg_energy_worker_all(kw):
         print(f"  Missing file: {err}, skipping frame {global_idx}")
         return
 
-    e_var = f"E:{species}"
-    n_var = f"N:{species}"
-    _avg_fn = _calc_average_energy_scaled(avg_energy_scale)
-    data_xy.register_derived_variable("derived:avg_energy", _avg_fn, e_var, n_var)
+    if derived_kind in recon.DERIVED:
+        _avg_fn = recon.DERIVED[derived_kind]   # (field_e, field_n) -> target units
+    else:
+        _avg_fn = _calc_average_energy_scaled(avg_energy_scale)
+    data_xy.register_derived_variable("derived:field", _avg_fn, e_var, n_var)
     if print_minmax and hasattr(data_xy, 'get_block_data'):
-        print_stats(data_xy, "derived:avg_energy")
+        print_stats(data_xy, "derived:field")
 
     plot_kwargs = dict(norm=avg_energy_norm, interpolation="nearest")
 
@@ -754,7 +763,7 @@ def _render_avg_energy_worker_all(kw):
     if xz_n_fpath is not None and xz_e_fpath is not None:
         try:
             data_xz = GroupData([xz_n_fpath, xz_e_fpath])
-            data_xz.register_derived_variable("derived:avg_energy",
+            data_xz.register_derived_variable("derived:field",
                                               _avg_fn, e_var, n_var)
         except FileNotFoundError:
             data_xz = None
@@ -765,8 +774,8 @@ def _render_avg_energy_worker_all(kw):
         ax_xz = fig.add_subplot(gs[0])
         ax_xy = fig.add_subplot(gs[1], sharex=ax_xz)
 
-        pcm = data_xz.plot_slice("derived:avg_energy", ax=ax_xz, **plot_kwargs)
-        data_xy.plot_slice("derived:avg_energy", ax=ax_xy, **plot_kwargs)
+        pcm = data_xz.plot_slice("derived:field", ax=ax_xz, **plot_kwargs)
+        data_xy.plot_slice("derived:field", ax=ax_xy, **plot_kwargs)
         rescale_image_extents(ax_xz, coord_scale)
         rescale_image_extents(ax_xy, coord_scale)
 
@@ -797,7 +806,7 @@ def _render_avg_energy_worker_all(kw):
         cb.set_label(avg_energy_label)
     else:
         fig, ax = plt.subplots(figsize=FIGSIZE)
-        pcm = data_xy.plot_slice("derived:avg_energy", ax=ax, **plot_kwargs)
+        pcm = data_xy.plot_slice("derived:field", ax=ax, **plot_kwargs)
         rescale_image_extents(ax, coord_scale)
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad=0.10)
@@ -826,27 +835,49 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
                           units='code', species=0,
                           out_prefix=f'{JOBNAME}_frame_avg_energy',
                           var_key='avg_energy',
+                          derived_kind='avg_energy',
+                          e_spec=None, n_spec=None,
                           coord_scale=1.0,
                           coord_label=r"\mathrm{M}_\odot"):
     """
-    Derived average neutrino energy = E:s / N:s, rendered in parallel across
-    all segments.  Frames are deduplicated by simulation time.
+    Derived quantity from a pair of per-cell fields, rendered in parallel across
+    all segments.  Frames are deduplicated by sim time.
+
+    The two input files/variables are chosen by (in priority order):
+      * explicit e_spec / n_spec = (new_prefix, old_prefix, varname) -- used for
+        cross-file quantities such as Y_nu = n_nu (rad_n) / n_baryon (prim dens);
+      * else, if derived_kind is a bns_nurates recon kind, the FLUID-frame
+        comoving moments J:s / n:s (rad_J / rad_n) -- that reconstruction is
+        only defined in the fluid frame;
+      * else the LAB-frame moments E:s / N:s (rad_E / rad_N) for the E/N energy
+        diagnostics (avg_energy / nu_energy).
+    The 'e' role is the first fn argument, the 'n' role the second.
     """
     _sc, _lb, _log, _lo, _hi = au.plot_params(var_key, units)
     _norm = LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi)
-    n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_N_xy", f"{JOBNAME}.rad_m1_N")
-    e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_E_xy", f"{JOBNAME}.rad_m1_E")
+    if e_spec is not None and n_spec is not None:
+        e_prefix = _detect_prefix_all(output_dirs, e_spec[0], e_spec[1])
+        n_prefix = _detect_prefix_all(output_dirs, n_spec[0], n_spec[1])
+        e_var, n_var = e_spec[2], n_spec[2]
+    elif derived_kind in recon.DERIVED:
+        e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_J_xy", f"{JOBNAME}.rad_J_xy")
+        n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_n_xy", f"{JOBNAME}.rad_n_xy")
+        e_var, n_var = f"J:{species}", f"n:{species}"
+    else:
+        n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_N_xy", f"{JOBNAME}.rad_m1_N")
+        e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_E_xy", f"{JOBNAME}.rad_m1_E")
+        e_var, n_var = f"E:{species}", f"N:{species}"
 
     t_to_n = _collect_frames_by_time(output_dirs, n_prefix)
     t_to_e = _collect_frames_by_time(output_dirs, e_prefix)
 
     if not t_to_n or not t_to_e:
-        print("  No N/E files found for avg_energy")
+        print(f"  No input files found for '{var_key}' ({e_prefix} / {n_prefix})")
         return
 
     common_times = sorted(set(t_to_n.keys()) & set(t_to_e.keys()))
     if not common_times:
-        print("  No matching N/E frame pairs found for avg_energy")
+        print(f"  No matching frame pairs found for '{var_key}'")
         return
 
     # Per-series subfolder <name>_xy (one movie per folder in make_movies.sh).
@@ -867,6 +898,9 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
              avg_energy_label=_lb,
              avg_energy_norm=_norm,
              species=species,
+             derived_kind=derived_kind,
+             e_var=e_var,
+             n_var=n_var,
              out_prefix=out_prefix,
              coord_scale=coord_scale, coord_label=coord_label)
         for idx, t in enumerate(common_times)
@@ -1057,9 +1091,12 @@ def parse_args():
                             "history", "rho_max", "trackers", "run_speed",
                             "density", "temperature", "s00", "s00_avg",
                             "bnorm", "bmax",
-                            "rad_E", "rad_N", "rad_N2", "rad_abs", "rad_abs0",
+                            "rad_E", "rad_N", "rad_N2", "rad_J", "rad_n",
+                            "rad_abs", "rad_abs0",
                             "rad_eta0", "rad_eta1", "avg_energy",
                             "nu_energy", "nu_energy1", "nu_energy2",
+                            "nu_y", "nu_eta_t", "nu_temp_t",
+                            "nu_avge", "nu_Ynu",
                             "z4c",
                             "all",
                         ],
@@ -1113,6 +1150,8 @@ def main():
     # Auto-detect radiation file prefix scheme (new: bns.rad_E_xy, old: bns.rad_m1_E)
     _RAD_E = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_E_xy",   f"{JOBNAME}.rad_m1_E")
     _RAD_N = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_N_xy",   f"{JOBNAME}.rad_m1_N")
+    _RAD_J = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_J_xy",   f"{JOBNAME}.rad_J_xy")
+    _RAD_n = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_n_xy",   f"{JOBNAME}.rad_n_xy")
     _ABS_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.abs_0_xy",   f"{JOBNAME}.rad_m1_abs_0")
     _ABS_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.abs_1_xy",   f"{JOBNAME}.rad_m1_abs_1")
     _ETA_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.eta_0_xy",   f"{JOBNAME}.rad_m1_eta_0")
@@ -1245,6 +1284,34 @@ def main():
                           trackers=trackers, scale_factor=_sc, skip_existing=skip_existing,
                           coord_scale=coord_scale, coord_label=coord_label)
 
+    if enabled("rad_J"):
+        print("[rad_J] Rendering fluid-frame radiation energy density J:0 frames...")
+        _sc, _lb, _log, _lo, _hi = au.plot_params('J:0', units)
+        render_frames_all(output_dirs, figpath,
+                          file_prefix=_RAD_J, var_name="J:0",
+                          cmap="inferno",
+                          norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
+                          label=_lb, out_prefix=f"{JOBNAME}_frame_rad_J0",
+                          xlim=XY_LIM, ylim=XY_LIM,
+                          print_minmax=True,
+                          show_trackers=show_trackers, show_refinement=True,
+                          trackers=trackers, scale_factor=_sc, skip_existing=skip_existing,
+                          coord_scale=coord_scale, coord_label=coord_label)
+
+    if enabled("rad_n"):
+        print("[rad_n] Rendering fluid-frame radiation number density n:0 frames...")
+        _sc, _lb, _log, _lo, _hi = au.plot_params('n:0', units)
+        render_frames_all(output_dirs, figpath,
+                          file_prefix=_RAD_n, var_name="n:0",
+                          cmap="inferno",
+                          norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
+                          label=_lb, out_prefix=f"{JOBNAME}_frame_rad_n0",
+                          xlim=XY_LIM, ylim=XY_LIM,
+                          print_minmax=True,
+                          show_trackers=show_trackers, show_refinement=True,
+                          trackers=trackers, scale_factor=_sc, skip_existing=skip_existing,
+                          coord_scale=coord_scale, coord_label=coord_label)
+
     if enabled("rad_abs"):
         print("[rad_abs] Rendering absorption opacity abs_1:0 frames...")
         _sc, _lb, _log, _lo, _hi = au.plot_params('abs_1:0', units)
@@ -1347,6 +1414,49 @@ def main():
                                   out_prefix=f"{JOBNAME}_frame_{_sec}",
                                   var_key='nu_energy',
                                   coord_scale=coord_scale, coord_label=coord_label)
+
+    # bns_nurates thick-distribution reconstruction (y, eta_t, temp_t) from the
+    # per-species FLUID-frame M1 moments J, n (rad_J / rad_n outputs -- NOT the
+    # lab-frame rad_E / rad_N).  Species 0 (nue) by default; see the heavy-lepton
+    # note in bns_nurates_recon.py.  Computed in bns_nurates (ngs) units
+    # regardless of --units.
+    # These all derive from the per-species FLUID-frame moments J, n (rad_J /
+    # rad_n -- NOT the lab-frame rad_E / rad_N).  nu_avge = J/n is the fluid-
+    # frame mean energy; the rest are the bns_nurates thick-distribution recon.
+    # Species 0 (nue) by default; see the heavy-lepton note in
+    # bns_nurates_recon.py.
+    _RECON_SECTIONS = [
+        ("nu_avge",   r"fluid-frame mean energy $\langle e\rangle=J/n$"),
+        ("nu_y",      r"reconstructed degeneracy invariant $y$"),
+        ("nu_eta_t",  r"reconstructed degeneracy $\eta_t=\mu/T$"),
+        ("nu_temp_t", r"reconstructed spectral temperature $T_\nu$"),
+    ]
+    for _sec, _desc in _RECON_SECTIONS:
+        if enabled(_sec):
+            print(f"[{_sec}] Rendering {_desc} (fluid frame) frames...")
+            render_avg_energy_all(output_dirs, figpath, print_minmax=True,
+                                  show_trackers=show_trackers, show_refinement=True,
+                                  trackers=trackers, xlim=XY_LIM, ylim=XY_LIM,
+                                  units=units, species=0,
+                                  out_prefix=f"{JOBNAME}_frame_{_sec}",
+                                  var_key=_sec, derived_kind=_sec,
+                                  coord_scale=coord_scale, coord_label=coord_label)
+
+    # Neutrino number fraction per baryon Y_nu = n_nu / n_b : a cross-file
+    # quantity pairing the fluid-frame number density n_nu (rad_n, 'n:0') with
+    # the baryon number density n_b = rho/m_b from the hydro rest-mass density
+    # (prim_xy, 'dens').  Species 0 (nue).
+    if enabled("nu_Ynu"):
+        print("[nu_Ynu] Rendering neutrino fraction per baryon $Y_\\nu=n_\\nu/n_b$ frames...")
+        render_avg_energy_all(output_dirs, figpath, print_minmax=True,
+                              show_trackers=show_trackers, show_refinement=True,
+                              trackers=trackers, xlim=XY_LIM, ylim=XY_LIM,
+                              units=units, species=0,
+                              out_prefix=f"{JOBNAME}_frame_nu_Ynu",
+                              var_key='nu_Ynu', derived_kind='nu_Ynu',
+                              e_spec=(f"{JOBNAME}.rad_n_xy", f"{JOBNAME}.rad_n_xy", "n:0"),
+                              n_spec=(f"{JOBNAME}.prim_xy",  f"{JOBNAME}.prim_xy",  "dens"),
+                              coord_scale=coord_scale, coord_label=coord_label)
 
     print("\nDone.")
 
