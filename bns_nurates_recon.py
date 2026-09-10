@@ -68,8 +68,9 @@ S_N = au.CODE2NGS_NUMDENS   # fm^-3    -> nm^-3      (= 1e18)
 # Degenerate ceiling of y = F2^4/F3^3  (eta -> inf limit, = 64/81).
 Y_DEGEN_LIMIT = 64.0 / 81.0
 
-_FLOOR = 1e-100   # same guard as bns_nurates on n, J (in ngs units)
-_ETA_CAP = 20.0   # hard clamp on eta_t
+_FLOOR = 1e-100     # same guard as bns_nurates on n, J (in ngs units)
+_ETA_CAP = 20.0     # hard clamp bns_nurates applies to eta_t (sim-faithful)
+_ETA_UNCAPPED = 1e3 # finite sentinel for y >= 64/81 in the uncapped diagnostic
 
 fdi_litconst = 7.38905609893065023   # e^2
 
@@ -142,9 +143,18 @@ def fdi_p3(y):
     return np.where(y > 0.0, -fd + C[0] + y2 * (C[1] + y2 * C[2]), fd)
 
 
-def eta_t_from_y(y):
-    """Invert y -> eta_t via the four-branch rational fits (distribution.hpp),
-    including the hard clamp eta_t <= 20."""
+def eta_t_from_y(y, apply_cap=True):
+    """Invert y -> eta_t via the four-branch rational fits (distribution.hpp).
+
+    apply_cap=True (bns_nurates behaviour): the exp-rational branch is used only
+    for y2 < y < y3, everything else falls to eta_t = 20, and a final min(.,20)
+    hard-clamps -- this is what the sim actually feeds the opacities.
+
+    apply_cap=False (diagnostic): the exp-rational branch, which recovers the
+    real eta_t well past 20 near y3, is NOT clamped; only y >= y3 (beyond the
+    Fermi-Dirac ceiling 64/81, where eta_t formally diverges) is set to a large
+    sentinel.  This shows the *actual* reconstructed degeneracy the grey moments
+    imply, i.e. how hard the run is pushing against the guard."""
     y = np.asarray(y, dtype=float)
     y1, y2, y3 = 0.005, 0.7, 0.7901234567745267
     n1 = [0.19926987701997, 38865.0149220478, 14364.6331099737,
@@ -171,9 +181,17 @@ def eta_t_from_y(y):
         # y2 < y < y3 : exp-rational
         eta_c = np.exp(_horner([n3[0], -n3[1], n3[2], n3[3], n3[4], -n3[5], n3[6]], y) /
                        _horner([1, d3[0], d3[1], -d3[2], -d3[3], -d3[4], d3[5]], y))
+    if apply_cap:
+        eta = np.select([y < y1, (y >= y1) & (y <= y2), (y > y2) & (y < y3)],
+                        [eta_a, eta_b, eta_c], default=_ETA_CAP)
+        return np.minimum(eta, _ETA_CAP)
+    # uncapped: keep the real exp-rational value for y2 < y < y3 (can exceed 20);
+    # y >= y3 is past the FD ceiling -> diverges -> large finite sentinel.
     eta = np.select([y < y1, (y >= y1) & (y <= y2), (y > y2) & (y < y3)],
-                    [eta_a, eta_b, eta_c], default=_ETA_CAP)
-    return np.minimum(eta, _ETA_CAP)
+                    [eta_a, eta_b, eta_c], default=_ETA_UNCAPPED)
+    return np.clip(np.nan_to_num(eta, nan=_ETA_UNCAPPED,
+                                 posinf=_ETA_UNCAPPED, neginf=-_ETA_UNCAPPED),
+                   -_ETA_UNCAPPED, _ETA_UNCAPPED)
 
 
 # ---------------------------------------------------------------------------
@@ -196,13 +214,16 @@ def calc_y(J_code, n_code):
         return n * (n / J) ** 3 / kBS_FourPi_hc3
 
 def calc_eta_t(J_code, n_code):
-    """Reconstructed degeneracy parameter eta_t = mu/T (clamped at 20)."""
-    return eta_t_from_y(calc_y(J_code, n_code))
+    """Reconstructed degeneracy parameter eta_t = mu/T, UNCAPPED (diagnostic):
+    shows the actual value the grey moments imply, not the sim's clamp at 20."""
+    return eta_t_from_y(calc_y(J_code, n_code), apply_cap=False)
 
 def calc_temp_t(J_code, n_code):
-    """Reconstructed spectral temperature temp_t = F2/F3 * J/n [MeV]."""
+    """Reconstructed spectral temperature temp_t = F2/F3 * J/n [MeV].
+    Uses the CAPPED eta_t (apply_cap=True) to match what the sim feeds the
+    opacities -- this quantity is meant to reproduce the sim's temp_t."""
     J, n = _to_ngs(J_code, n_code)
-    eta = eta_t_from_y(calc_y(J_code, n_code))
+    eta = eta_t_from_y(calc_y(J_code, n_code), apply_cap=True)
     with np.errstate(divide='ignore', invalid='ignore'):
         return fdi_p2(eta) / fdi_p3(eta) * (J / n)
 
@@ -229,13 +250,54 @@ def calc_Ynu(n_nu_code, rho_code):
         return np.where(nb > 0., n_nu / nb, 0.)
 
 
+# --- heavy-lepton (nux) variants ------------------------------------------
+# In M1 "nux" means mu+tau, so the athenak wrapper feeds bns_nurates 0.5*(J,n)
+# for species 2/3 (see radiation_m1_calc_opacities_nurates.cpp; n[id_nux] =
+# 0.5*n_nux, J[id_nux] = 0.5*j_nux) BEFORE CalculateDistrParamsFromM1.  So the
+# faithful nux y / eta_t / temp_t use half the rad_J:2 / rad_n:2 fields.
+#   y_nux  = 0.5 * y(J,n)          (n^4/J^3 with both halved -> factor 0.5)
+#   eta_t  differs (function of the halved y)
+#   temp_t: J/n ratio is unchanged by the 0.5, but eta_t (hence F2/F3) changes
+#   <e>=J/n is unchanged by the 0.5 -> nux_avge just uses species 2 directly.
+
+def _nux_half(J_code, n_code):
+    return 0.5 * np.asarray(J_code, float), 0.5 * np.asarray(n_code, float)
+
+
+def calc_y_nux(J_code, n_code):
+    """nux degeneracy invariant y, with the M1 mu+tau 0.5 weighting."""
+    return calc_y(*_nux_half(J_code, n_code))
+
+
+def calc_eta_t_nux(J_code, n_code):
+    """nux degeneracy eta_t = mu/T, UNCAPPED (diagnostic), 0.5-weighted."""
+    Jh, nh = _nux_half(J_code, n_code)
+    return eta_t_from_y(calc_y(Jh, nh), apply_cap=False)
+
+
+def calc_temp_t_nux(J_code, n_code):
+    """nux reconstructed spectral temperature [MeV], capped eta (sim-faithful)."""
+    Jh, nh = _nux_half(J_code, n_code)
+    J, n = _to_ngs(Jh, nh)
+    eta = eta_t_from_y(calc_y(Jh, nh), apply_cap=True)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return fdi_p2(eta) / fdi_p3(eta) * (J / n)
+
+
 # var_key (as used by athenak_units.plot_params / BNS_all.py) -> callable.
 # fn(field_e, field_n): for the recon/avge kinds the pair is (J, n); for Y_nu
-# it is (n_nu, rho).  BNS_all.py wires the correct file pair per kind.
+# it is (n_nu, rho).  BNS_all.py wires the correct file pair (and species) per
+# kind.  'nu_*' = electron species (0/1, no weighting); 'nux_*' = heavy species
+# (2/3) with the 0.5 mu+tau weighting.  nux_avge reuses calc_avge (J/n is
+# invariant under the 0.5).
 DERIVED = {
-    'nu_y':      calc_y,
-    'nu_eta_t':  calc_eta_t,
-    'nu_temp_t': calc_temp_t,
-    'nu_avge':   calc_avge,
-    'nu_Ynu':    calc_Ynu,
+    'nu_y':       calc_y,
+    'nu_eta_t':   calc_eta_t,
+    'nu_temp_t':  calc_temp_t,
+    'nu_avge':    calc_avge,
+    'nu_Ynu':     calc_Ynu,
+    'nux_y':      calc_y_nux,
+    'nux_eta_t':  calc_eta_t_nux,
+    'nux_temp_t': calc_temp_t_nux,
+    'nux_avge':   calc_avge,
 }

@@ -243,11 +243,16 @@ _CODE_VMIN = {
     'bmag':      1e-10,
     # bns_nurates thick-distribution reconstruction (already in target units;
     # conversion is baked into the derived function, so scale = 1 for these).
-    'nu_y':      0.0,     # dimensionless, 0 .. 64/81
-    'nu_eta_t':  -5.0,    # degeneracy mu/T, clamped at 20
+    'nu_y':      0.0,     # dimensionless; FD ceiling 64/81=0.79, overshoot shown
+    'nu_eta_t':  -20.0,   # degeneracy mu/T, UNCAPPED (sim clamps at 20)
     'nu_temp_t': 0.0,     # spectral temperature [MeV]
     'nu_avge':   0.0,     # fluid-frame mean energy J/n [MeV]
-    'nu_Ynu':    1e-6,    # neutrino fraction per baryon n_nu/n_b
+    'nu_Ynu':    0.0,     # neutrino fraction per baryon n_nu/n_b (linear, like Y_e)
+    # heavy-lepton (nux) variants (species 2, 0.5 mu+tau weighting)
+    'nux_y':     0.0,     # ceiling 0.5*64/81 = 0.395
+    'nux_eta_t': -20.0,
+    'nux_temp_t':0.0,
+    'nux_avge':  0.0,
 }
 _CODE_VMAX = {
     'dens':      2e15   / CODE2CGS_DENS,   # ≈ 3.2e-3
@@ -264,11 +269,15 @@ _CODE_VMAX = {
     'avg_energy':1e-3,
     'nu_energy': 150.0 / CODE2MEV_AVGENE,
     'bmag':      1e-5,
-    'nu_y':      0.8,     # ~64/81 = 0.7901 degenerate ceiling
-    'nu_eta_t':  20.0,    # hard clamp
+    'nu_y':      1.5,     # wider than the 0.79 ceiling to reveal overshoot
+    'nu_eta_t':  50.0,    # wider than the sim's 20 clamp to reveal true degeneracy
     'nu_temp_t': 60.0,    # [MeV], matches the matter-temperature colour scale
     'nu_avge':   50.0,    # [MeV]
-    'nu_Ynu':    1e-2,    # neutrino fraction per baryon
+    'nu_Ynu':    0.1,     # neutrino fraction per baryon (Y_e uses 0-0.5)
+    'nux_y':     0.75,    # ~half the nue range (nux ceiling is halved)
+    'nux_eta_t': 50.0,
+    'nux_temp_t':60.0,
+    'nux_avge':  50.0,
 }
 
 # Scale factors: (var, units) → multiplicative factor applied to code values
@@ -386,11 +395,25 @@ _LABELS = {
     ('nu_Ynu',    'code'): r"$Y_\nu = n_\nu/n_b$",
     ('nu_Ynu',    'ngs' ): r"$Y_\nu = n_\nu/n_b$",
     ('nu_Ynu',    'cgs' ): r"$Y_\nu = n_\nu/n_b$",
+    # heavy-lepton (nux) reconstruction variants
+    ('nux_y',     'code'): r"$y_{\nu_x} = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nux_y',     'ngs' ): r"$y_{\nu_x} = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nux_y',     'cgs' ): r"$y_{\nu_x} = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nux_eta_t', 'code'): r"$\eta_{t,\nu_x} = \mu/T$ (reconstructed)",
+    ('nux_eta_t', 'ngs' ): r"$\eta_{t,\nu_x} = \mu/T$ (reconstructed)",
+    ('nux_eta_t', 'cgs' ): r"$\eta_{t,\nu_x} = \mu/T$ (reconstructed)",
+    ('nux_temp_t','code'): r"$T_{\nu_x}~[\mathrm{MeV}]$ (reconstructed)",
+    ('nux_temp_t','ngs' ): r"$T_{\nu_x}~[\mathrm{MeV}]$ (reconstructed)",
+    ('nux_temp_t','cgs' ): r"$T_{\nu_x}~[\mathrm{MeV}]$ (reconstructed)",
+    ('nux_avge',  'code'): r"$\langle\varepsilon_{\nu_x}\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
+    ('nux_avge',  'ngs' ): r"$\langle\varepsilon_{\nu_x}\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
+    ('nux_avge',  'cgs' ): r"$\langle\varepsilon_{\nu_x}\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
 }
 
 # Variables that use a linear (not log) colorscale
 _LINEAR_VARS = {'temperature', 's_00', 'nu_energy',
-                'nu_y', 'nu_eta_t', 'nu_temp_t', 'nu_avge'}
+                'nu_y', 'nu_eta_t', 'nu_temp_t', 'nu_avge', 'nu_Ynu',
+                'nux_y', 'nux_eta_t', 'nux_temp_t', 'nux_avge'}
 
 
 def plot_params(var, units='code'):

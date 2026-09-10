@@ -64,9 +64,9 @@ SECTIONS=(
     # trackers      # NS trajectory plot (both stars, smoothed)
     run_speed     # AthenaK cycles/sec from log file
 
-    # density       # density (dens) slice frames  [+ trackers + AMR grid]
-    # temperature   # temperature slice frames      [+ trackers + AMR grid]
-    # s00           # electron fraction (s_00) frames
+    density       # density (dens) slice frames  [+ trackers + AMR grid]
+    temperature   # temperature slice frames      [+ trackers + AMR grid]
+    s00           # electron fraction (s_00) frames
     # s00_avg       # area-weighted average Y_e vs time (1-D timeseries)
     # bnorm         # magnetic field magnitude |B| slice frames   [bns.prim_xy bcc1-3]
     # bmax          # global max |B| & location vs time (1-D timeseries) [bns.prim3D]
@@ -91,6 +91,11 @@ SECTIONS=(
     # nu_eta_t    # reconstructed degeneracy η_t = μ/T (clamped at 20)
     # nu_temp_t   # reconstructed spectral temperature T_ν (ν_e)  [MeV]
     # nu_Ynu      # neutrino fraction per baryon Y_ν = n_ν/n_b (ν_e)  [needs bns.prim_xy]
+    # --- heavy-lepton (ν_x, species 2) reconstruction: 0.5 μ+τ weighting applied ---
+    # nux_avge    # fluid-frame mean energy <e>=J/n (ν_x)  [MeV]
+    # nux_y       # reconstructed degeneracy invariant y (ν_x, ceiling 0.5·64/81)
+    # nux_eta_t   # reconstructed degeneracy η_t = μ/T (ν_x, uncapped)
+    # nux_temp_t  # reconstructed spectral temperature T_ν (ν_x)  [MeV]
 )
 # ---------------------------------------------------------------------------
 

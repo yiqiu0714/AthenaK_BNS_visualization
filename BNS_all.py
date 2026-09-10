@@ -13,6 +13,7 @@ deduplicated by simulation time; the later segment's version is kept.
 """
 
 import argparse
+import bisect
 import glob
 import multiprocessing
 import os
@@ -219,6 +220,35 @@ def _collect_frames_by_time(output_dirs, file_prefix):
         if t is not None:
             time_to_fpath[t] = fpath
     return time_to_fpath
+
+
+def _pair_frames_by_time(t_to_e, t_to_n, tol=None):
+    """Pair the e-series and n-series frames by NEAREST sim time.
+
+    Two output blocks (e.g. rad_n vs prim_xy) can be written on slightly
+    different clocks (offsets of ~0.04 Msun) or cadences, so an exact float-key
+    intersection collapses to a handful of coincidental matches.  For each
+    e-time we take the nearest n-time within *tol* (default: half the median
+    e-cadence).  Series that already share identical times pair exactly.
+    Returns a sorted list of (e_time, e_fpath, n_fpath).
+    """
+    te = sorted(t_to_e)
+    tn = sorted(t_to_n)
+    if not te or not tn:
+        return []
+    if tol is None:
+        tol = 0.5 * float(np.median(np.diff(te))) if len(te) > 1 else 1.0
+        tol = max(tol, 1e-6)
+    pairs = []
+    for t in te:
+        i = bisect.bisect_left(tn, t)
+        cands = []
+        if i < len(tn): cands.append(tn[i])
+        if i > 0:       cands.append(tn[i - 1])
+        best = min(cands, key=lambda x: abs(x - t))
+        if abs(best - t) <= tol:
+            pairs.append((t, t_to_e[t], t_to_n[best]))
+    return pairs
 
 
 def collect_combined_frames(output_dirs, file_prefix, xz_prefix=None, step=1):
@@ -875,8 +905,11 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
         print(f"  No input files found for '{var_key}' ({e_prefix} / {n_prefix})")
         return
 
-    common_times = sorted(set(t_to_n.keys()) & set(t_to_e.keys()))
-    if not common_times:
+    # Pair by nearest time: the two output blocks may be on slightly different
+    # clocks (e.g. rad_n at t=...042 vs prim_xy at t=...000), so exact matching
+    # would drop nearly all frames.  Identical-time series still pair exactly.
+    pairs = _pair_frames_by_time(t_to_e, t_to_n)
+    if not pairs:
         print(f"  No matching frame pairs found for '{var_key}'")
         return
 
@@ -888,7 +921,7 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
     zlim = (0, ylim[1]) if ylim is not None else (0, None)
     worker_args = [
         dict(global_idx=idx,
-             xy_n_fpath=t_to_n[t], xy_e_fpath=t_to_e[t],
+             xy_n_fpath=n_fpath, xy_e_fpath=e_fpath,
              xz_n_fpath=None, xz_e_fpath=None,
              xlim=xlim, ylim=ylim, zlim=zlim, figpath=figpath,
              print_minmax=print_minmax,
@@ -903,14 +936,14 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
              n_var=n_var,
              out_prefix=out_prefix,
              coord_scale=coord_scale, coord_label=coord_label)
-        for idx, t in enumerate(common_times)
+        for idx, (_t, e_fpath, n_fpath) in enumerate(pairs)
     ]
 
     n_workers = min(multiprocessing.cpu_count(), len(worker_args))
     with multiprocessing.Pool(n_workers) as pool:
         pool.map(_render_avg_energy_worker_all, worker_args)
 
-    print(f"  Rendered {len(common_times)} {out_prefix} frames")
+    print(f"  Rendered {len(pairs)} {out_prefix} frames")
 
 
 def _compute_s00_avg_worker_fpath(fpath):
@@ -1097,6 +1130,7 @@ def parse_args():
                             "nu_energy", "nu_energy1", "nu_energy2",
                             "nu_y", "nu_eta_t", "nu_temp_t",
                             "nu_avge", "nu_Ynu",
+                            "nux_y", "nux_eta_t", "nux_temp_t", "nux_avge",
                             "z4c",
                             "all",
                         ],
@@ -1433,11 +1467,32 @@ def main():
     ]
     for _sec, _desc in _RECON_SECTIONS:
         if enabled(_sec):
-            print(f"[{_sec}] Rendering {_desc} (fluid frame) frames...")
+            print(f"[{_sec}] Rendering {_desc} (fluid frame, nue) frames...")
             render_avg_energy_all(output_dirs, figpath, print_minmax=True,
                                   show_trackers=show_trackers, show_refinement=True,
                                   trackers=trackers, xlim=XY_LIM, ylim=XY_LIM,
                                   units=units, species=0,
+                                  out_prefix=f"{JOBNAME}_frame_{_sec}",
+                                  var_key=_sec, derived_kind=_sec,
+                                  coord_scale=coord_scale, coord_label=coord_label)
+
+    # Same reconstruction for the heavy leptons (nux, species 2).  The nux_*
+    # kinds apply the M1 mu+tau 0.5 weighting to J:2 / n:2 (see
+    # bns_nurates_recon.py), so y/eta_t/temp_t match what the sim feeds
+    # bns_nurates for the heavy species.
+    _RECON_SECTIONS_NUX = [
+        ("nux_avge",   r"fluid-frame mean energy $\langle e\rangle=J/n$"),
+        ("nux_y",      r"reconstructed degeneracy invariant $y$"),
+        ("nux_eta_t",  r"reconstructed degeneracy $\eta_t=\mu/T$"),
+        ("nux_temp_t", r"reconstructed spectral temperature $T_\nu$"),
+    ]
+    for _sec, _desc in _RECON_SECTIONS_NUX:
+        if enabled(_sec):
+            print(f"[{_sec}] Rendering {_desc} (fluid frame, nux) frames...")
+            render_avg_energy_all(output_dirs, figpath, print_minmax=True,
+                                  show_trackers=show_trackers, show_refinement=True,
+                                  trackers=trackers, xlim=XY_LIM, ylim=XY_LIM,
+                                  units=units, species=2,
                                   out_prefix=f"{JOBNAME}_frame_{_sec}",
                                   var_key=_sec, derived_kind=_sec,
                                   coord_scale=coord_scale, coord_label=coord_label)
