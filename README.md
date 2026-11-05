@@ -93,6 +93,39 @@ python3 BNS_all.py --simpath /path/to/run \
 
 Run `python3 BNS_all.py --help` for the full list of sections and flags.
 
+### Output-layout compatibility
+
+No format switch is needed: readers detect the files in each `output-XXXX`
+segment, so a run may change layouts between restarts.
+
+| Data | Older split outputs | Grouped outputs |
+|------|---------------------|-----------------|
+| Radiation slices | `rad_E_xy`, `rad_N_xy` (also legacy `rad_m1_E/N`) | `m1_xy` or `m1_mom_xy` |
+| Opacity slices | `eta_0_xy`, `eta_1_xy`, `abs_0_xy`, `abs_1_xy` | `m1opac_xy` or `m1_opac_xy` |
+| Fluid-frame slices | `rad_J_xy`, `rad_n_xy` | `m1ff_xy` |
+| SPH radiation | `rad_m1_E`, `rad_m1_F`, `rad_m1_N` | `rad_m1_moments` or `m1_mom` |
+| SPH gauge | `z4c_alpha`, `z4c_betax/y/z` | `z4c_gauge` |
+
+Slice names also apply to the corresponding `xz`/`yz` planes supported by
+each driver. `BNS_compare.py` and the panel-grid driver retain their existing
+xz-only fallback for the oldest unqualified binary IDs.
+`BNS_all.py`, comparisons, and panel grids all recognize `m1_xy`/`m1opac_xy`
+as written by `LR_dU.par`. Grouped files are preferred when both slice layouts
+are present. Fluid-frame derived plots use `J`/`n`, not lab-frame `E`/`N`.
+
+SPH analysis accepts both `r=300.00` and ranges such as `r=10.00-500.00`,
+selecting the nearest stored shell to the configured extraction radius.
+Ejecta integration uses each snapshot's angular grid, including when its
+resolution changes between segments. Grouped `rad_m1_moments` already contains
+E, F, and N: separate output blocks are not required. Quantities absent from
+both layouts still require enabling the corresponding simulation outputs.
+
+Run the compatibility regression tests in the configured Python environment:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 ### 2-D comparison grids
 
 ```bash
@@ -238,7 +271,7 @@ gravitational waveform.
 | `run_analysis.sh` | Orchestrator: reads paths from `../config.ini`, then runs the merger-time, ejecta, neutrino, plotting, and accretion steps. |
 | `merger_time.py` | Merger time = peak of the (2,2) strain amplitude \|h₂₂\|, with h obtained from psi4₂₂ by fixed-frequency integration, merged across all `output-*/waveforms`. A restart that stops before merger falls back to its restart parent's waveform (`output-0000/parent`); `t_merger` in config.ini overrides. Writes `merger_time.txt`. |
 | `analyze_ejecta.py` | Per-snapshot ejecta diagnostics: mass-ejection rate, and mass distributions vs v∞, temperature, Yₑ, entropy-per-baryon (from EOS Q2), θ, plus the 2-D Yₑ–θ composition map. Needs the EOS table. |
-| `analyze_neutrinos.py` | Neutrino energy luminosity, mean energy, and angular distribution from `rad_m1_E/F/N`. |
+| `analyze_neutrinos.py` | Neutrino energy luminosity, mean energy, and angular distribution from grouped `rad_m1_moments` or split `rad_m1_E/F/N`. |
 | `analyze_accretion.py` | Post-merger accretion rate from baryon bookkeeping (`Ṁ_accr = −dM_b/dt + Ṁ_ej(t−r/⟨v⟩)`), reusing the `.hst` files + ejecta outputs. Writes `fig_accretion.png` / `Mdot_accr_*.txt`. |
 | `plot_analysis.py` | Builds `fig_ejecta.pdf` (1×4 mass distributions vs v∞/T/Yₑ/entropy, log Mₑⱼ 1e-6–1e-2 M⊙), `fig_ejecta_time.pdf` (2×3 summary: rate, cumulative mass, instantaneous/cumulative ⟨Yₑ⟩, velocity, angle, and composition), `fig_ejecta_ye_theta.pdf` (Yₑ vs θ), and `fig_neutrino.pdf` (log luminosity 1e51–3e54, mean energy 0–60). |
 | `utils_ejecta.py` | Shared spherical-integration helpers. |

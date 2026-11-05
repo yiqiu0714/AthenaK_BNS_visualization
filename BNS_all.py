@@ -297,7 +297,7 @@ def collect_combined_frames(output_dirs, file_prefix, xz_prefix=None, step=1,
     with step applied after deduplication.
 
     If companion_prefix is given (an xy prefix of a second output, e.g. the
-    fluid-frame M1 file next to bns.prim_xy), only times present in both are
+    fluid-frame M1 file next to bns.prim_xy), only times with a nearby companion are
     kept and xy_fpath/xz_fpath become (primary, companion) path tuples, to be
     loaded together as a GroupData.  xz is None unless both xz files exist.
     """
@@ -307,8 +307,10 @@ def collect_combined_frames(output_dirs, file_prefix, xz_prefix=None, step=1,
 
     time_to_comp = None
     if companion_prefix is not None:
-        time_to_comp = _collect_frames_by_time(output_dirs, companion_prefix)
-        time_to_xy = {t: f for t, f in time_to_xy.items() if t in time_to_comp}
+        pairs = _pair_frames_by_time(
+            time_to_xy, _collect_frames_by_time(output_dirs, companion_prefix))
+        time_to_xy = {t: primary for t, primary, _ in pairs}
+        time_to_comp = {t: companion for t, _, companion in pairs}
         if not time_to_xy:
             return []
         comp_xz_prefix = tuple(
@@ -613,7 +615,7 @@ def _nu_y_heavy(n_nu, J_nu):
 def _load_frame(fpath):
     """BinaryData for one path, GroupData for a (primary, companion) tuple."""
     if isinstance(fpath, (tuple, list)):
-        return GroupData(list(fpath))
+        return GroupData(list(dict.fromkeys(fpath)))
     return BinaryData(fpath)
 
 
@@ -895,7 +897,7 @@ def _render_avg_energy_worker_all(kw):
     if zlim is not None: zlim = tuple(v * coord_scale for v in zlim)
 
     try:
-        data_xy = GroupData([xy_n_fpath, xy_e_fpath])
+        data_xy = GroupData(list(dict.fromkeys([xy_n_fpath, xy_e_fpath])))
     except FileNotFoundError as err:
         print(f"  Missing file: {err}, skipping frame {global_idx}")
         return
@@ -913,7 +915,7 @@ def _render_avg_energy_worker_all(kw):
     data_xz = None
     if xz_n_fpath is not None and xz_e_fpath is not None:
         try:
-            data_xz = GroupData([xz_n_fpath, xz_e_fpath])
+            data_xz = GroupData(list(dict.fromkeys([xz_n_fpath, xz_e_fpath])))
             data_xz.register_derived_variable("derived:field",
                                               _avg_fn, e_var, n_var)
         except FileNotFoundError:
@@ -995,7 +997,7 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
     all segments.  Frames are deduplicated by sim time.
 
     The two input files/variables are chosen by (in priority order):
-      * explicit e_spec / n_spec = (new_prefix, old_prefix, varname) -- used for
+      * explicit e_spec / n_spec = (*prefixes, varname) -- used for
         cross-file quantities such as Y_nu = n_nu (rad_n) / n_baryon (prim dens);
       * else, if derived_kind is a bns_nurates recon kind, the FLUID-frame
         comoving moments J:s / n:s (rad_J / rad_n) -- that reconstruction is
@@ -1007,16 +1009,16 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
     _sc, _lb, _log, _lo, _hi = au.plot_params(var_key, units)
     _norm = LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi)
     if e_spec is not None and n_spec is not None:
-        e_prefix = _detect_prefix_all(output_dirs, e_spec[0], e_spec[1])
-        n_prefix = _detect_prefix_all(output_dirs, n_spec[0], n_spec[1])
-        e_var, n_var = e_spec[2], n_spec[2]
+        e_prefix = _detect_prefix_all(output_dirs, *e_spec[:-1])
+        n_prefix = _detect_prefix_all(output_dirs, *n_spec[:-1])
+        e_var, n_var = e_spec[-1], n_spec[-1]
     elif derived_kind in recon.DERIVED:
-        e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_J_xy", f"{JOBNAME}.rad_J_xy")
-        n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_n_xy", f"{JOBNAME}.rad_n_xy")
+        e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1ff_xy", f"{JOBNAME}.rad_J_xy")
+        n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1ff_xy", f"{JOBNAME}.rad_n_xy")
         e_var, n_var = f"J:{species}", f"n:{species}"
     else:
-        n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_mom_xy", f"{JOBNAME}.rad_N_xy", f"{JOBNAME}.rad_m1_N")
-        e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_mom_xy", f"{JOBNAME}.rad_E_xy", f"{JOBNAME}.rad_m1_E")
+        n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_xy", f"{JOBNAME}.m1_mom_xy", f"{JOBNAME}.rad_N_xy", f"{JOBNAME}.rad_m1_N")
+        e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_xy", f"{JOBNAME}.m1_mom_xy", f"{JOBNAME}.rad_E_xy", f"{JOBNAME}.rad_m1_E")
         e_var, n_var = f"E:{species}", f"N:{species}"
 
     t_to_n = _collect_frames_by_time(output_dirs, n_prefix)
@@ -1304,15 +1306,15 @@ def main():
     # Pre-load combined trackers once (reused by all frame renders)
     trackers = load_trackers_all(output_dirs)
 
-    # Auto-detect radiation file prefix scheme (new: bns.rad_E_xy, old: bns.rad_m1_E)
-    _RAD_E = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_mom_xy",  f"{JOBNAME}.rad_E_xy",   f"{JOBNAME}.rad_m1_E")
-    _RAD_N = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_mom_xy",  f"{JOBNAME}.rad_N_xy",   f"{JOBNAME}.rad_m1_N")
-    _ABS_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.abs_0_xy",   f"{JOBNAME}.rad_m1_abs_0")
-    _ABS_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.abs_1_xy",   f"{JOBNAME}.rad_m1_abs_1")
-    _ETA_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.eta_0_xy",   f"{JOBNAME}.rad_m1_eta_0")
-    _ETA_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.eta_1_xy",   f"{JOBNAME}.rad_m1_eta_1")
-    _RAD_J = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_J_xy",   f"{JOBNAME}.rad_J_xy")
-    _RAD_n = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_n_xy",   f"{JOBNAME}.rad_n_xy")
+    # Candidates are resolved per segment, including runs that changed layout.
+    _RAD_E = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_xy", f"{JOBNAME}.m1_mom_xy", f"{JOBNAME}.rad_E_xy", f"{JOBNAME}.rad_m1_E")
+    _RAD_N = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_xy", f"{JOBNAME}.m1_mom_xy", f"{JOBNAME}.rad_N_xy", f"{JOBNAME}.rad_m1_N")
+    _ABS_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1opac_xy", f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.abs_0_xy", f"{JOBNAME}.rad_m1_abs_0")
+    _ABS_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1opac_xy", f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.abs_1_xy", f"{JOBNAME}.rad_m1_abs_1")
+    _ETA_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1opac_xy", f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.eta_0_xy", f"{JOBNAME}.rad_m1_eta_0")
+    _ETA_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1opac_xy", f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.eta_1_xy", f"{JOBNAME}.rad_m1_eta_1")
+    _RAD_J = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1ff_xy", f"{JOBNAME}.rad_J_xy")
+    _RAD_n = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1ff_xy", f"{JOBNAME}.rad_n_xy")
 
     XY_LIM = None if full_domain else (-60, 60)
 
@@ -1391,7 +1393,7 @@ def main():
             _sc, _lb, _log, _lo, _hi = au.plot_params('Y_nu', units)
             render_frames_all(output_dirs, figpath,
                               file_prefix=f"{JOBNAME}.prim_xy",
-                              companion_prefix=f"{JOBNAME}.m1ff_xy",
+                              companion_prefix=_RAD_n,
                               var_name=f"derived:Y_nu{_sp}",
                               cmap="plasma",
                               norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
@@ -1419,7 +1421,7 @@ def main():
                   f"frames (fallback at y >= {au.NU_Y_FD_MAX:.4f})...")
             _sc, _lb, _log, _lo, _hi = au.plot_params('nu_y', units)
             render_frames_all(output_dirs, figpath,
-                              file_prefix=f"{JOBNAME}.m1ff_xy",
+                              file_prefix=_RAD_n, companion_prefix=_RAD_J,
                               var_name=f"derived:nu_y{_sp}",
                               cmap="plasma",
                               norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
@@ -1688,7 +1690,7 @@ def main():
                               units=units, species=0,
                               out_prefix=f"{JOBNAME}_frame_nu_Ynu",
                               var_key='nu_Ynu', derived_kind='nu_Ynu',
-                              e_spec=(f"{JOBNAME}.rad_n_xy", f"{JOBNAME}.rad_n_xy", "n:0"),
+                              e_spec=(*_RAD_n, "n:0"),
                               n_spec=(f"{JOBNAME}.prim_xy",  f"{JOBNAME}.prim_xy",  "dens"),
                               coord_scale=coord_scale, coord_label=coord_label)
 

@@ -227,6 +227,9 @@ def _process_snapshot_ejecta(args):
     r     = mhd.r
     theta = mhd.theta
     phi   = mhd.phi
+    # Angular resolution may change along with the output layout.
+    riemann_weights = get_riemann_weights(
+        _np.ones(theta.shape), theta[0, :], phi[:, 0])
 
     z4c_alpha_raw = alpha.fields['z4c_alpha']
     phi_zero    = (phi == phi.min())

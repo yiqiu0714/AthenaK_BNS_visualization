@@ -105,9 +105,9 @@ class Diagnostic:
 # drivers can be read side by side.
 # ---------------------------------------------------------------------------
 _PRIM = ("{job}.prim_{plane}",)
-_M1_MOM = ("{job}.m1_mom_{plane}", "{job}.rad_E_{plane}")
-_M1_NUM = ("{job}.m1_mom_{plane}", "{job}.rad_N_{plane}")
-_M1_OPAC = "{job}.m1_opac_{plane}"
+_M1_MOM = ("{job}.m1_{plane}", "{job}.m1_mom_{plane}", "{job}.rad_E_{plane}")
+_M1_NUM = ("{job}.m1_{plane}", "{job}.m1_mom_{plane}", "{job}.rad_N_{plane}")
+_M1_OPAC = ("{job}.m1opac_{plane}", "{job}.m1_opac_{plane}")
 
 DIAGNOSTICS = {
     "density": Diagnostic(
@@ -143,19 +143,19 @@ DIAGNOSTICS = {
         legacy_prefixes=("{job}.rad_m1_N",),
     ),
     "rad_abs": Diagnostic(
-        name="rad_abs", var="abs_1:0", prefixes=(_M1_OPAC, "{job}.abs_1_{plane}"),
+        name="rad_abs", var="abs_1:0", prefixes=(*_M1_OPAC, "{job}.abs_1_{plane}"),
         cmap="inferno", legacy_prefixes=("{job}.rad_m1_abs_1",),
     ),
     "rad_abs0": Diagnostic(
-        name="rad_abs0", var="abs_0:0", prefixes=(_M1_OPAC, "{job}.abs_0_{plane}"),
+        name="rad_abs0", var="abs_0:0", prefixes=(*_M1_OPAC, "{job}.abs_0_{plane}"),
         cmap="inferno", legacy_prefixes=("{job}.rad_m1_abs_0",),
     ),
     "rad_eta0": Diagnostic(
-        name="rad_eta0", var="eta_0:0", prefixes=(_M1_OPAC, "{job}.eta_0_{plane}"),
+        name="rad_eta0", var="eta_0:0", prefixes=(*_M1_OPAC, "{job}.eta_0_{plane}"),
         cmap="inferno", legacy_prefixes=("{job}.rad_m1_eta_0",),
     ),
     "rad_eta1": Diagnostic(
-        name="rad_eta1", var="eta_1:0", prefixes=(_M1_OPAC, "{job}.eta_1_{plane}"),
+        name="rad_eta1", var="eta_1:0", prefixes=(*_M1_OPAC, "{job}.eta_1_{plane}"),
         cmap="inferno", legacy_prefixes=("{job}.rad_m1_eta_1",),
     ),
 }
