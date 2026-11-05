@@ -48,6 +48,8 @@ PLOTS=(
     # orthoslice          # xy / xz / yz Matplotlib slices
     isosurface          # PyVista 3D nested isosurfaces
     # isosurface_colorT   # density isosurface colored by temperature
+    # isosurface_colorYe  # density isosurface colored by Y_e  (composition)
+    # volume              # density volume rendering (see VOLUME settings)
 )
 
 SCALARS=(
@@ -69,18 +71,21 @@ START=0              # uncomment to override first snapshot index
 # END=80               # uncomment to override last  snapshot index
 
 # ======================== parallelism ==================
-JOBS=8                 # parallel jobs (1 = serial, 4-8 recommended on login node)
+JOBS=4                 # 320^3 rendering is memory-heavy; raise only on a compute node
 
 # ======================== units ========================
 UNITS=cgs              # 'code' or 'cgs'  (cgs: density g/cm^3, |B| Gauss)
 # UNITS=code
 
 # ======================== grid / crop ==================
-RESOLUTION=256         # output grid cells per axis
+RESOLUTION=320         # uniform reconstruction cells per longest axis
+INTERPOLATION=linear   # linear for smooth rho/T/Ye; nearest for native cells
+IMAGE_INTERPOLATION=bilinear  # orthoslice display: nearest | bilinear | bicubic
 CROP=80                # half-width crop: domain -> [-CROP, CROP]^3
 
 # ======================== isosurface settings ==========
-WINDOW_SIZE="1200,1200"
+WINDOW_SIZE="1600,1600"
+ANTI_ALIASING=ssaa     # none | ssaa | msaa | fxaa
 CAMERA_ELEVATION=30
 CAMERA_AZIMUTH=25
 VIEW_ANGLE=35
@@ -94,19 +99,20 @@ BACKGROUND=black
 # noted in comments (e.g. log_bmag -13..-7, log_dens via 6e8..2e15 / 6.178e17).
 declare -A ISO_LEVELS ISO_OPACITY ISO_CLIM ISO_CMAP
 ISO_LEVELS[log_dens]="8,10,12,14"
-ISO_OPACITY[log_dens]="0.15,0.25,0.4,0.8"
+ISO_OPACITY[log_dens]="0.08,0.15,0.30,0.70"
 ISO_CLIM[log_dens]="6,15"
 ISO_CMAP[log_dens]="inferno"
 
 ISO_LEVELS[temperature]="5,15,30,45"
-ISO_OPACITY[temperature]="0.15,0.3,0.5,0.8"
+ISO_OPACITY[temperature]="0.08,0.18,0.35,0.70"
 ISO_CLIM[temperature]="0,55"
 ISO_CMAP[temperature]="viridis"
 
-# cgs (Gauss).  For UNITS=code use ISO_LEVELS="-12,-10.5,-9,-7.5" / ISO_CLIM="-13,-7".
+# cgs (Gauss), 1e12-1e15 G to match athenak_units.plot_params('bmag').
+# For UNITS=code use ISO_LEVELS="-12,-10.5,-9,-7.5" / ISO_CLIM="-13,-7".
 ISO_LEVELS[log_bmag]="12,13,14"
 ISO_OPACITY[log_bmag]="0.2,0.35,0.8"
-ISO_CLIM[log_bmag]="9,15"
+ISO_CLIM[log_bmag]="12,15"
 ISO_CMAP[log_bmag]="plasma"
 
 # current (|curl B|): levels/clim left empty -> auto percentiles per frame.
@@ -115,10 +121,74 @@ ISO_CMAP[current]="inferno"
 ISO_CMAP[vorticity]="magma"
 ISO_CMAP[qcriterion]="magma"
 
+# ======================== timing / annotation ==========
+# Merger time in CODE units.  When set, every frame is labelled
+# "t - t_merger = +X.XXX ms" instead of absolute simulation time.
+# Find it with sph_data_analysis/merger_time.py.
+T0=""                  # e.g. T0=5310
+
+# Orthographic projection makes the on-screen scale exact, which is what the
+# ruler below relies on.  Leave PROJECTION=perspective for the classic look.
+PROJECTION=perspective # 'perspective' or 'orthographic'
+PARALLEL_SCALE=""      # orthographic half-height in M; empty = fit to domain
+CAMERA_TRACK=""        # optional zoom-track file: "time_ms scale [ruler]" rows
+
+# How the 3D frames are labelled.  "mathtext" composites the clock, colour bar
+# and ruler with Matplotlib after the render, so maths is typeset properly
+# (log_10 rho, Y_e, M_sun) exactly as in the 2D plots.  "vtk" uses VTK's own
+# text, which has no maths layout and can only print "log10 rho [g cm^-3]".
+ANNOTATE=mathtext      # mathtext | vtk
+
+# Annotation typeface.  sans = DejaVu Sans (the matplotlib default, standard
+# for figures), serif = STIX (Times-alike), cm = Computer Modern (LaTeX
+# papers); arial/times/courier are VTK built-ins used only by ANNOTATE=vtk.
+FONT=sans
+
+SCALEBAR=""            # "auto" (1/2/5 ruler) or a length in M; empty = off
+                       # NOTE: setting this forces orthographic projection.
+AXES=false             # true = draw an orientation triad
+SMOOTH_ITERATIONS=20   # volume-preserving Taubin passes per contour (0 = off)
+
+# ======================== Y_e isosurface settings ======
+# Composition painted on density isosurfaces.  Volume rendering cannot show
+# Y_e once the ejecta is optically thick -- every ray then leaves through tens
+# of M of Y_e ~ 0.4 outflow and the frame saturates -- so this stays surfaces.
+# Levels are log10(rho) in the active UNITS (cgs: 11 and 13 g/cm^3).
+# Keep YE_CLIM fixed across a run so colors mean the same thing in every frame.
+COLOR_LEVELS="11,13"  # density shells used for both T and Ye colouring
+COLOR_OPACITY="0.18,0.65"  # reveal the inner shell through the outer one
+YE_LEVELS="${COLOR_LEVELS}"
+YE_OPACITY="${COLOR_OPACITY}"
+YE_CLIM="0.05,0.45"
+YE_CMAP="coolwarm"
+
+# ======================== volume settings ==============
+# Density volume rendering.  Its colour ramp paints tenuous material dark,
+# which is why density works here and composition does not.
+VOL_SCALAR=log_dens
+VOL_CLIM="7,15"        # cgs log10(g/cm^3); peak is ~15 near merger
+VOL_CMAP="inferno"
+VOL_OPACITY=sigmoid    # linear | sqrt | sigmoid | geom
+VOL_OPACITY_SCALE=1.0
+VOL_SAMPLES=""         # resample to N^3 before rendering; empty = keep grid
+VOL_MODE=auto          # auto | volume | layers  (auto falls back to layers
+                       # where the GL stack cannot composite a true volume)
+VOL_LAYERS=24          # more, lighter shells reduce fallback banding
+# A 480^3 float32 field is ~422 MiB and VTK keeps its own copy, so volume
+# frames are the memory-hungry ones.  Jobs are capped for them alone.
+VOL_MAX_JOBS=2
+
 # ======================== movie settings ================
 MOVIE_FPS=10               # frames per second
 MOVIE_CRF=18               # H.264 quality: 0 (lossless) - 51 (worst)
+MOVIE_FAST_AFTER=100       # keep these first frames at normal speed
+MOVIE_FAST_STRIDE=4        # after that, keep every Nth frame (1 = disabled)
 # MAKE_MOVIES=false        # uncomment to skip movie generation
+
+# ======================== dry run ======================
+# DRY_RUN=true prints the render commands it would run, then exits.
+# Useful for checking new presets before spending node time.
+DRY_RUN=${DRY_RUN:-false}
 
 # ======================== skip existing ================
 # SKIP_EXISTING=false
@@ -133,6 +203,34 @@ echo "UNITS   : ${UNITS}   SCALARS: ${SCALARS[*]}"
 echo ""
 
 contains() { local e; for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done; return 1; }
+
+# ---------------------------------------------------------------------------
+# Flags shared by every PyVista renderer (isosurface / volume)
+# ---------------------------------------------------------------------------
+COMMON_3D_FLAGS=""
+COMMON_3D_FLAGS+=" --interpolation ${INTERPOLATION}"
+COMMON_3D_FLAGS+=" --anti-aliasing ${ANTI_ALIASING}"
+[[ -n "${T0}" ]]              && COMMON_3D_FLAGS+=" --t0 ${T0}"
+[[ "${PROJECTION}" == "orthographic" ]] && COMMON_3D_FLAGS+=" --projection orthographic"
+[[ -n "${PARALLEL_SCALE}" ]]  && COMMON_3D_FLAGS+=" --parallel-scale ${PARALLEL_SCALE}"
+[[ -n "${CAMERA_TRACK}" ]]    && COMMON_3D_FLAGS+=" --camera-track ${CAMERA_TRACK}"
+[[ -n "${SCALEBAR}" ]]        && COMMON_3D_FLAGS+=" --scalebar ${SCALEBAR}"
+[[ "${AXES}" == "true" ]]     && COMMON_3D_FLAGS+=" --axes"
+[[ -n "${FONT}" ]]            && COMMON_3D_FLAGS+=" --font ${FONT}"
+[[ -n "${ANNOTATE}" ]]        && COMMON_3D_FLAGS+=" --annotate ${ANNOTATE}"
+
+if [[ -n "${CAMERA_TRACK}" && ! -f "${CAMERA_TRACK}" ]]; then
+    echo "ERROR: CAMERA_TRACK file not found: ${CAMERA_TRACK}"
+    exit 1
+fi
+
+# Volume frames hold several copies of the grid, so they get their own cap.
+EFFECTIVE_JOBS=${JOBS}
+if contains volume "${PLOTS[@]}" && (( JOBS > VOL_MAX_JOBS )); then
+    echo "NOTE: volume rendering is memory-heavy; reducing JOBS ${JOBS} -> ${VOL_MAX_JOBS}"
+    echo "      (raise VOL_MAX_JOBS if you know the node can take it)"
+    EFFECTIVE_JOBS=${VOL_MAX_JOBS}
+fi
 
 # ---------------------------------------------------------------------------
 # Discover snapshot files across all output-XXXX segments
@@ -159,7 +257,7 @@ for f in "${ALL_FILES[@]}"; do
     (( idx % STRIDE == 0 )) || continue
     SELECTED+=("$f")
 done
-echo "Selected ${#SELECTED[@]} snapshots (stride=${STRIDE}), JOBS=${JOBS}"
+echo "Selected ${#SELECTED[@]} snapshots (stride=${STRIDE}), JOBS=${EFFECTIVE_JOBS}"
 
 # ---------------------------------------------------------------------------
 # Build command list — one line per plot
@@ -183,6 +281,7 @@ for FILE in "${SELECTED[@]}"; do
                 echo "${PYTHON} ${PLOT3D_DIR}/plot_orthoslices.py \
 -i ${FILE} -o ${OUT} \
 --scalar ${SCALAR} --resolution ${RESOLUTION} --crop ${CROP} \
+--interpolation ${INTERPOLATION} --image-interpolation ${IMAGE_INTERPOLATION} \
 --cmap ${CMAP} --dpi 200 --units ${UNITS}" >> "$CMDFILE"
                 (( TOTAL_QUEUED++ ))
             fi
@@ -206,6 +305,8 @@ for FILE in "${SELECTED[@]}"; do
                 [[ -n "${ISO_OPACITY[$SCALAR]:-}" ]] && CMD+=" --opacity ${ISO_OPACITY[$SCALAR]}"
                 [[ -n "${ISO_CLIM[$SCALAR]:-}" ]]    && CMD+=" --clim=${ISO_CLIM[$SCALAR]}"
                 [[ -n "${STREAMLINES}" ]]            && CMD+=" --streamlines ${STREAMLINES} --streamline-seeds dual-density-max"
+                CMD+=" --smooth-iterations ${SMOOTH_ITERATIONS}"
+                CMD+="${COMMON_3D_FLAGS}"
                 echo "$CMD" >> "$CMDFILE"
                 (( TOTAL_QUEUED++ ))
             fi
@@ -226,15 +327,65 @@ for FILE in "${SELECTED[@]}"; do
 --camera-elevation ${CAMERA_ELEVATION} --camera-azimuth ${CAMERA_AZIMUTH} \
 --view-angle ${VIEW_ANGLE} --background ${BACKGROUND} --show-scalar-bar \
 --units ${UNITS}"
-                [[ -n "${ISO_LEVELS[$SCALAR]:-}" ]]  && CMD+=" --levels=${ISO_LEVELS[$SCALAR]}"
-                [[ -n "${ISO_OPACITY[$SCALAR]:-}" ]] && CMD+=" --opacity ${ISO_OPACITY[$SCALAR]}"
+                CMD+=" --levels=${COLOR_LEVELS} --opacity ${COLOR_OPACITY}"
                 [[ -n "${STREAMLINES}" ]]            && CMD+=" --streamlines ${STREAMLINES} --streamline-seeds dual-density-max"
+                CMD+=" --smooth-iterations ${SMOOTH_ITERATIONS}"
+                CMD+="${COMMON_3D_FLAGS}"
+                echo "$CMD" >> "$CMDFILE"
+                (( TOTAL_QUEUED++ ))
+            fi
+        fi
+
+        # --- density isosurface colored by Y_e ---
+        # Y_e comes from 'ye' in coarse-grained HDF5 boxes and from the passive
+        # scalar 's_00' in AthenaK prim3D output; the loader accepts either.
+        if contains isosurface_colorYe "${PLOTS[@]}"; then
+            OUT="${FIGPATH}/iso_${SCALAR}_colorYe_${TAG}.png"
+            if [[ "${SKIP_EXISTING}" == "true" && -f "$OUT" ]]; then
+                (( SKIPPED++ ))
+            else
+                CMD="${PYTHON} ${PLOT3D_DIR}/plot_isosurfaces.py \
+-i ${FILE} -o ${OUT} \
+--scalar ${SCALAR} --color-by ye \
+--resolution ${RESOLUTION} --crop ${CROP} \
+--levels=${YE_LEVELS} --opacity ${YE_OPACITY} \
+--clim=${YE_CLIM} --cmap ${YE_CMAP} --off-screen \
+--window-size ${WINDOW_SIZE} \
+--camera-elevation ${CAMERA_ELEVATION} --camera-azimuth ${CAMERA_AZIMUTH} \
+--view-angle ${VIEW_ANGLE} --background ${BACKGROUND} --show-scalar-bar \
+--units ${UNITS}"
+                CMD+=" --smooth-iterations ${SMOOTH_ITERATIONS}"
+                CMD+="${COMMON_3D_FLAGS}"
                 echo "$CMD" >> "$CMDFILE"
                 (( TOTAL_QUEUED++ ))
             fi
         fi
 
     done
+
+    # --- density volume rendering (one per snapshot, not per scalar) ---
+    if contains volume "${PLOTS[@]}"; then
+        OUT="${FIGPATH}/vol_${VOL_SCALAR}_${TAG}.png"
+        if [[ "${SKIP_EXISTING}" == "true" && -f "$OUT" ]]; then
+            (( SKIPPED++ ))
+        else
+            CMD="${PYTHON} ${PLOT3D_DIR}/plot_volume.py \
+-i ${FILE} -o ${OUT} \
+--scalar ${VOL_SCALAR} --resolution ${RESOLUTION} --crop ${CROP} \
+--smooth-iterations ${SMOOTH_ITERATIONS} \
+--clim=${VOL_CLIM} --cmap ${VOL_CMAP} \
+--opacity ${VOL_OPACITY} --opacity-scale ${VOL_OPACITY_SCALE} \
+--mode ${VOL_MODE} --layers ${VOL_LAYERS} --off-screen \
+--window-size ${WINDOW_SIZE} \
+--camera-elevation ${CAMERA_ELEVATION} --camera-azimuth ${CAMERA_AZIMUTH} \
+--view-angle ${VIEW_ANGLE} --background ${BACKGROUND} --show-scalar-bar \
+--units ${UNITS}"
+            [[ -n "${VOL_SAMPLES}" ]] && CMD+=" --samples ${VOL_SAMPLES}"
+            CMD+="${COMMON_3D_FLAGS}"
+            echo "$CMD" >> "$CMDFILE"
+            (( TOTAL_QUEUED++ ))
+        fi
+    fi
 done
 
 echo "Queued ${TOTAL_QUEUED} plots, skipped ${SKIPPED}"
@@ -248,26 +399,34 @@ if [[ $TOTAL_QUEUED -eq 0 ]]; then
     exit 0
 fi
 
+if [[ "${DRY_RUN}" == "true" ]]; then
+    echo ""
+    echo "=== DRY RUN: ${TOTAL_QUEUED} command(s) ==="
+    cat "$CMDFILE"
+    rm -f "$CMDFILE"
+    exit 0
+fi
+
 START_TIME=$SECONDS
 
-if [[ $JOBS -le 1 ]]; then
+if [[ ${EFFECTIVE_JOBS} -le 1 ]]; then
     DONE=0
     while IFS= read -r cmd; do
         (( DONE++ ))
-        echo "[${DONE}/${TOTAL_QUEUED}] $(echo "$cmd" | grep -oP '(ortho|iso)\S*\.png')"
+        echo "[${DONE}/${TOTAL_QUEUED}] $(echo "$cmd" | grep -oP '(ortho|iso|vol)\S*\.png')"
         eval "$cmd" 2>&1 | grep -vaE "WARN\|"
     done < "$CMDFILE"
 else
-    echo "Running ${TOTAL_QUEUED} plots, ${JOBS} at a time (xargs)..."
+    echo "Running ${TOTAL_QUEUED} plots, ${EFFECTIVE_JOBS} at a time (xargs)..."
     # Each line of CMDFILE is one full command; run it with bash -c, JOBS in flight.
-    xargs -P "$JOBS" -I CMD bash -c CMD < "$CMDFILE" 2>&1 | grep -vaE "WARN\|"
+    xargs -P "${EFFECTIVE_JOBS}" -I CMD bash -c CMD < "$CMDFILE" 2>&1 | grep -vaE "WARN\|"
 fi
 
 ELAPSED=$(( SECONDS - START_TIME ))
 rm -f "$CMDFILE"
 
 echo ""
-echo "=== Done: ${TOTAL_QUEUED} plots in ${ELAPSED}s (${JOBS} jobs), ${SKIPPED} skipped ==="
+echo "=== Done: ${TOTAL_QUEUED} plots in ${ELAPSED}s (${EFFECTIVE_JOBS} jobs), ${SKIPPED} skipped ==="
 echo "Output in ${FIGPATH}"
 
 # ---------------------------------------------------------------------------
@@ -310,11 +469,26 @@ esac
 echo ""
 echo "=== Making movies (encoder: ${_VCODEC}, fps: ${MOVIE_FPS}) ==="
 
+if ! [[ "${MOVIE_FAST_AFTER}" =~ ^[0-9]+$ ]] ||
+   ! [[ "${MOVIE_FAST_STRIDE}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: MOVIE_FAST_AFTER must be >= 0 and MOVIE_FAST_STRIDE must be >= 1." >&2
+    exit 1
+fi
+
+_MOVIE_TIMING_FILTER=""
+if (( MOVIE_FAST_STRIDE > 1 )); then
+    # Preserve frames [0, MOVIE_FAST_AFTER) and decimate the rest.  Resetting
+    # PTS plays the selected frames continuously at MOVIE_FPS, so the tail is
+    # MOVIE_FAST_STRIDE times faster and requires fewer encoded frames.
+    _MOVIE_TIMING_FILTER="select='if(lt(n\\,${MOVIE_FAST_AFTER})\\,1\\,not(mod(n-${MOVIE_FAST_AFTER}\\,${MOVIE_FAST_STRIDE})))',setpts=N/(${MOVIE_FPS}*TB),fps=${MOVIE_FPS},"
+    echo "    timing: first ${MOVIE_FAST_AFTER} frames normal, then ${MOVIE_FAST_STRIDE}x faster"
+fi
+
 cd "${FIGPATH}"
 
-# Discover unique prefixes from iso_<name>_NNNNN.png and ortho_<name>_NNNNN.png
+# Discover unique prefixes from iso_/ortho_/vol_<name>_NNNNN.png
 shopt -s nullglob
-_ALL_FRAMES=( iso_*_?????.png ortho_*_?????.png )
+_ALL_FRAMES=( iso_*_?????.png ortho_*_?????.png vol_*_?????.png )
 shopt -u nullglob
 
 if [[ ${#_ALL_FRAMES[@]} -eq 0 ]]; then
@@ -338,42 +512,61 @@ mkdir -p "${MOVIEDIR}"
 _MOVIE_COUNT=0
 for prefix in "${_PREFIXES[@]}"; do
     shopt -s nullglob
-    FRAMES=( $(ls "${prefix}"_?????.png 2>/dev/null | sort) )
+    # The five-digit suffix makes the shell's lexical order numerical.  Keep
+    # this as a real globbed array (rather than parsing `ls`) so unusual paths
+    # cannot split frame names.
+    FRAMES=( "${prefix}"_?????.png )
     shopt -u nullglob
 
     [[ ${#FRAMES[@]} -lt 2 ]] && continue
 
     [[ "${_VCODEC}" == "gif" ]] && _ext="gif" || _ext="mp4"
     outfile="${MOVIEDIR}/${prefix}.${_ext}"
-    listfile=$(mktemp "${TMPDIR:-/tmp}/bns3d_fflist.XXXXXX")
-
-    for f in "${FRAMES[@]}"; do
-        printf "file '%s/%s'\n" "${FIGPATH}" "${f}" >> "${listfile}"
-    done
+    # Encode beside the destination and publish with one atomic rename.  An
+    # interrupted batch then leaves the last good movie intact instead of an
+    # MP4 containing only an unfinished mdat atom and no moov index.
+    tmp_out="${MOVIEDIR}/.${prefix}.tmp.${BASHPID}.${_ext}"
+    rm -f -- "${tmp_out}"
 
     echo "  ${prefix}: ${#FRAMES[@]} frames -> $(basename "${outfile}")"
 
+    # image2's glob input assigns one timestamp per PNG at -framerate.  The
+    # previous concat list contained no duration records, which can produce
+    # invalid or collapsed DTS/PTS values for single-image files.
+    input_glob="${FIGPATH}/${prefix}_?????.png"
+    _encode_ok=false
     if [[ "${_VCODEC}" == "gif" ]]; then
-        "${_FFMPEG}" -y \
-            -r "${MOVIE_FPS}" \
-            -f concat -safe 0 -i "${listfile}" \
-            -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse=dither=bayer" \
+        if "${_FFMPEG}" -y \
+            -framerate "${MOVIE_FPS}" -pattern_type glob -i "${input_glob}" \
+            -vf "${_MOVIE_TIMING_FILTER}scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse=dither=bayer" \
             -loop 0 \
-            "${outfile}" \
-            -loglevel warning -stats
+            "${tmp_out}" \
+            -loglevel warning -stats; then
+            _encode_ok=true
+        fi
     else
-        "${_FFMPEG}" -y \
-            -r "${MOVIE_FPS}" \
-            -f concat -safe 0 -i "${listfile}" \
-            -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+        if "${_FFMPEG}" -y \
+            -framerate "${MOVIE_FPS}" -pattern_type glob -i "${input_glob}" \
+            -vf "${_MOVIE_TIMING_FILTER}scale=trunc(iw/2)*2:trunc(ih/2)*2" \
             -c:v "${_VCODEC}" -pix_fmt yuv420p \
             "${_QFLAGS[@]}" \
-            "${outfile}" \
-            -loglevel warning -stats
+            -movflags +faststart \
+            "${tmp_out}" \
+            -loglevel warning -stats; then
+            _encode_ok=true
+        fi
     fi
 
-    rm -f "${listfile}"
-    (( _MOVIE_COUNT++ ))
+    # A successful encoder exit should already imply a finalized container;
+    # open and decode one frame as a cheap guard before replacing outfile.
+    if [[ "${_encode_ok}" == "true" ]] && \
+       "${_FFMPEG}" -v error -i "${tmp_out}" -map 0:v:0 -frames:v 1 -f null -; then
+        mv -f -- "${tmp_out}" "${outfile}"
+        (( _MOVIE_COUNT++ ))
+    else
+        echo "WARNING: ${prefix} movie failed validation; keeping any existing ${outfile}" >&2
+        rm -f -- "${tmp_out}"
+    fi
 done
 
 echo ""

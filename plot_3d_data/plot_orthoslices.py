@@ -23,12 +23,14 @@ from style3d import (
     default_scalar_style,
     finite_percentile_limits,
     get_scalar_field,
-    make_coordinates,
+    make_coordinate_axes,
     nearest_index,
     parse_center,
     parse_crop,
     parse_csv_floats,
     parse_domain_size,
+    relative_time_ms,
+    time_label,
 )
 
 
@@ -38,6 +40,8 @@ def _needed_variables(name: str):
         return ["dens"]
     if key in {"temperature", "temp"}:
         return ["temperature"]
+    if key in {"ye", "electron_fraction", "s_00"}:
+        return ["ye", "s_00"]
     if key in {"bmag", "log_bmag", "magnetic", "divb",
                "current", "curl_b", "jmag", "log_current"}:
         return ["bcc1", "bcc2", "bcc3"]
@@ -68,11 +72,19 @@ def main() -> None:
     parser.add_argument("--domain-size", default=None, help="One value for cubic domain or Lx,Ly,Lz")
     parser.add_argument("--dx", type=float, default=None, help="Override uniform grid spacing")
     parser.add_argument("--resolution", type=int, default=256, help="Output grid cells per axis for AMR data (default 256)")
+    parser.add_argument("--interpolation", choices=["linear", "nearest"],
+                        default="linear", help="AMR reconstruction method "
+                        "(default linear; nearest preserves native cells)")
+    parser.add_argument("--image-interpolation",
+                        choices=["nearest", "bilinear", "bicubic"],
+                        default="bilinear", help="2D display interpolation")
     parser.add_argument("--crop", default=None, help="Crop domain: half-width L or xmin,xmax,ymin,ymax,zmin,zmax")
     parser.add_argument("--cmap", default=None, help="Colormap name")
     parser.add_argument("--clim", default=None, help="Color limits as vmin,vmax")
     parser.add_argument("--norm", choices=["linear", "log", "symlog"], default="linear")
     parser.add_argument("--title", default=None)
+    parser.add_argument("--t0", type=float, default=None,
+                        help="Merger time in code units; title becomes merger-relative")
     parser.add_argument("--dpi", type=int, default=200)
     parser.add_argument("--units", default="code", choices=["code", "cgs"], help="Unit system (default: code)")
     args = parser.parse_args()
@@ -83,13 +95,15 @@ def main() -> None:
     crop = parse_crop(args.crop)
     dataset = load_3d_data(args.input, variables=_needed_variables(args.scalar),
                            domain_size=domain_size, dx=args.dx,
-                           resolution=args.resolution, crop=crop)
+                           resolution=args.resolution, crop=crop,
+                           interpolation=args.interpolation)
     convert_fields(dataset.fields, args.units)
-    values = get_scalar_field(dataset.fields, args.scalar, dataset.spacing)
+    values = get_scalar_field(dataset.fields, args.scalar, dataset.gradient_spacing)
 
-    coords = make_coordinates(dataset.shape, dataset.domain_size)
+    x, y, z = make_coordinate_axes(dataset.shape, dataset.domain_size,
+                                   dataset.coordinates)
     center = parse_center(args.center) or (0.0, 0.0, 0.0)
-    ix, iy, iz = nearest_index(coords, center)
+    ix, iy, iz = nearest_index((x, y, z), center)
 
     style = default_scalar_style(args.scalar, args.units)
     cmap = args.cmap or str(style["cmap"])
@@ -98,29 +112,34 @@ def main() -> None:
         raise ValueError("--clim must be vmin,vmax")
 
     norm = _norm(values, args.norm, clim)
-    x = coords[0][:, 0, 0]
-    y = coords[1][0, :, 0]
-    z = coords[2][0, 0, :]
 
     panels = [
-        (values[:, :, iz].T, (x[0], x[-1], y[0], y[-1]), r"$x~[\mathrm{M}_\odot]$", r"$y~[\mathrm{M}_\odot]$", f"xy, z={z[iz]:.3g}"),
-        (values[:, iy, :].T, (x[0], x[-1], z[0], z[-1]), r"$x~[\mathrm{M}_\odot]$", r"$z~[\mathrm{M}_\odot]$", f"xz, y={y[iy]:.3g}"),
-        (values[ix, :, :].T, (y[0], y[-1], z[0], z[-1]), r"$y~[\mathrm{M}_\odot]$", r"$z~[\mathrm{M}_\odot]$", f"yz, x={x[ix]:.3g}"),
+        (values[:, :, iz].T, x, y, r"$x~[\mathrm{M}_\odot]$", r"$y~[\mathrm{M}_\odot]$", f"xy, z={z[iz]:.3g}"),
+        (values[:, iy, :].T, x, z, r"$x~[\mathrm{M}_\odot]$", r"$z~[\mathrm{M}_\odot]$", f"xz, y={y[iy]:.3g}"),
+        (values[ix, :, :].T, y, z, r"$y~[\mathrm{M}_\odot]$", r"$z~[\mathrm{M}_\odot]$", f"yz, x={x[ix]:.3g}"),
     ]
 
     fig, axes = plt.subplots(1, 3, figsize=plot_style.figsize(1, 3, panel_w=3.0, panel_h=3.0),
                              constrained_layout=False)
     image = None
-    for ax, (arr, extent, xlabel, ylabel, title) in zip(axes, panels):
-        image = ax.imshow(
-            arr,
-            origin="lower",
-            extent=extent,
-            cmap=cmap,
-            norm=norm,
-            interpolation="nearest",
-            aspect="equal",
-        )
+    for ax, (arr, haxis, vaxis, xlabel, ylabel, title) in zip(axes, panels):
+        if dataset.is_uniform:
+            image = ax.imshow(
+                arr,
+                origin="lower",
+                extent=(haxis[0], haxis[-1], vaxis[0], vaxis[-1]),
+                cmap=cmap,
+                norm=norm,
+                interpolation=args.image_interpolation,
+                aspect="equal",
+            )
+        else:
+            # A stretched mesh has no single pixel size, so imshow's uniform
+            # extent would misplace every cell outside the refined core.
+            image = ax.pcolormesh(
+                haxis, vaxis, arr, cmap=cmap, norm=norm, shading="nearest",
+            )
+            ax.set_aspect("equal")
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
@@ -128,7 +147,8 @@ def main() -> None:
     if args.title:
         fig.suptitle(args.title)
     else:
-        fig.suptitle(f"t = {dataset.time:.3f}")
+        fig.suptitle(time_label(relative_time_ms(dataset.time, args.t0),
+                                args.t0 is not None, mathtext=True))
 
     fig.tight_layout()
 

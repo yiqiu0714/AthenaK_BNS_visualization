@@ -80,12 +80,32 @@ def glob_bin_files(directory, prefix):
     return sorted(glob.glob(pattern))
 
 
-def _detect_prefix_all(output_dirs, new_prefix, old_prefix):
-    """Return new_prefix if files exist in any segment, else old_prefix."""
-    for d in output_dirs:
-        if glob_bin_files(d, new_prefix):
-            return new_prefix
-    return old_prefix
+def _normalise_prefixes(prefixes):
+    """Return an ordered prefix tuple while keeping string callers working."""
+    if isinstance(prefixes, str):
+        return (prefixes,)
+    return tuple(prefixes)
+
+
+def _detect_prefix_all(output_dirs, *prefixes):
+    """Return ordered filename candidates for per-segment detection.
+
+    Each output segment may use a different naming generation.  Selection is
+    therefore deliberately deferred to the collectors below instead of choosing
+    one prefix globally for the whole run tree.
+    """
+    if not prefixes:
+        raise ValueError("at least one output prefix is required")
+    return tuple(prefixes)
+
+
+def _glob_first_prefix(directory, prefixes):
+    """Files for the first candidate present in one output segment."""
+    for prefix in _normalise_prefixes(prefixes):
+        files = glob_bin_files(directory, prefix)
+        if files:
+            return files
+    return []
 
 
 def print_stats(data, var_name):
@@ -203,7 +223,7 @@ def _collect_frames_by_time(output_dirs, file_prefix):
     """
     all_files = []
     for d in output_dirs:
-        all_files.extend(glob_bin_files(d, file_prefix))
+        all_files.extend(_glob_first_prefix(d, file_prefix))
 
     if not all_files:
         return {}
@@ -220,38 +240,63 @@ def _collect_frames_by_time(output_dirs, file_prefix):
     return time_to_fpath
 
 
-def collect_combined_frames(output_dirs, file_prefix, xz_prefix=None, step=1):
+def _xz_partner(xy_fpath, xz_prefix):
+    """Return the xz file with the same output number as xy_fpath, or None."""
+    if xz_prefix is None:
+        return None
+    m = re.search(r'\.(\d{5})\.bin$', os.path.basename(xy_fpath))
+    if not m:
+        return None
+    for prefix in _normalise_prefixes(xz_prefix):
+        candidate = os.path.join(
+            os.path.dirname(xy_fpath), f"{prefix}.{m.group(1)}.bin"
+        )
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def collect_combined_frames(output_dirs, file_prefix, xz_prefix=None, step=1,
+                            companion_prefix=None):
     """
     Collect all frames for file_prefix across all segments, deduplicated by
     simulation time (later segment wins).
 
     Returns list of (global_idx, xy_fpath, xz_fpath_or_None) sorted by sim time,
     with step applied after deduplication.
+
+    If companion_prefix is given (an xy prefix of a second output, e.g. the
+    fluid-frame M1 file next to bns.prim_xy), only times present in both are
+    kept and xy_fpath/xz_fpath become (primary, companion) path tuples, to be
+    loaded together as a GroupData.  xz is None unless both xz files exist.
     """
     time_to_xy = _collect_frames_by_time(output_dirs, file_prefix)
     if not time_to_xy:
         return []
 
-    # Build set of all existing XZ files for quick lookup
-    xz_file_set = set()
-    if xz_prefix is not None:
-        for d in output_dirs:
-            xz_file_set.update(glob_bin_files(d, xz_prefix))
+    time_to_comp = None
+    if companion_prefix is not None:
+        time_to_comp = _collect_frames_by_time(output_dirs, companion_prefix)
+        time_to_xy = {t: f for t, f in time_to_xy.items() if t in time_to_comp}
+        if not time_to_xy:
+            return []
+        comp_xz_prefix = tuple(
+            prefix.replace("_xy", "_xz")
+            for prefix in _normalise_prefixes(companion_prefix)
+            if "_xy" in prefix
+        ) or None
 
     sorted_times = sorted(time_to_xy.keys())[::step]
 
     result = []
     for global_idx, t in enumerate(sorted_times):
         xy_fpath = time_to_xy[t]
-        xz_fpath = None
-        if xz_prefix is not None:
-            m = re.search(r'\.(\d{5})\.bin$', os.path.basename(xy_fpath))
-            if m:
-                xz_candidate = os.path.join(
-                    os.path.dirname(xy_fpath), f"{xz_prefix}.{m.group(1)}.bin"
-                )
-                if xz_candidate in xz_file_set:
-                    xz_fpath = xz_candidate
+        xz_fpath = _xz_partner(xy_fpath, xz_prefix)
+        if time_to_comp is not None:
+            comp_xy = time_to_comp[t]
+            comp_xz = _xz_partner(comp_xy, comp_xz_prefix)
+            xz_fpath = (xz_fpath, comp_xz) if xz_fpath and comp_xz else None
+            xy_fpath = (xy_fpath, comp_xy)
         result.append((global_idx, xy_fpath, xz_fpath))
     return result
 
@@ -504,6 +549,62 @@ def _bmag_from_components(bx, by, bz):
     return np.sqrt(bx * bx + by * by + bz * bz)
 
 
+def _ynu_from_n_dens(n_nu, dens):
+    """Neutrino fraction Y_nu = n_nu / n_b.
+
+    n_nu is the fluid-frame neutrino number density n = N/Gamma (fm^-3, from the
+    rad_m1_fluid_frame output 'n:s'); n_b = rho / m_b (rho in code units).
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(dens > 0, n_nu / (dens * au.CODE2FM3_NB), np.nan)
+
+
+def _nu_y(n_nu, J_nu):
+    """bns_nurates degeneracy parameter y = n (n/J)^3 / (4 pi/(hc)^3).
+
+    Same expression as CalculateThickParamsFromM1 (distribution.hpp), which maps y
+    to the trapped degeneracy eta_t and, with use_eq_fallback_y (or AthenaK's
+    use_recon_y_fallback), falls back to Fermi-Dirac where y >= y3 = 64/81, the
+    fully degenerate limit no Fermi-Dirac spectrum can exceed.  n [fm^-3] and
+    J [MeV fm^-3] are the fluid-frame m1ff outputs; same floors as bns_nurates.
+    """
+    n = np.maximum(n_nu, 1e-100)
+    J = np.maximum(J_nu, 1e-100)
+    with np.errstate(over="ignore", invalid="ignore"):
+        return n * (n / J)**3 / au.FOURPI_HC3_FM
+
+
+def _nu_y_heavy(n_nu, J_nu):
+    """y for nu_x / anti-nu_x: bns_nurates is fed n/2, J/2 (M1 x = mu AND tau)."""
+    return _nu_y(0.5 * n_nu, 0.5 * J_nu)
+
+
+def _load_frame(fpath):
+    """BinaryData for one path, GroupData for a (primary, companion) tuple."""
+    if isinstance(fpath, (tuple, list)):
+        return GroupData(list(fpath))
+    return BinaryData(fpath)
+
+
+def _base_dataset(data):
+    """The BinaryData holding blocks/time (first member of a GroupData)."""
+    return data.datasets[0] if isinstance(data, GroupData) else data
+
+
+def _print_group_stats(data, derived):
+    """print_stats() for a derived variable whose inputs span a GroupData."""
+    gens = []
+    for v in derived['inputs']:
+        ds = next(d for d in data.datasets if v in d.variable_names)
+        gens.append(ds.get_block_data(v))
+    max_val, min_val = -np.inf, np.inf
+    for items in zip(*gens):
+        arr = derived['func'](*(a for _, a in items))
+        max_val = max(max_val, np.nanmax(arr))
+        min_val = min(min_val, np.nanmin(arr))
+    print(f"    t={data.datasets[0].time:.3f} Msun  |  max={max_val:.3e}  min={min_val:.3e}")
+
+
 def _render_frame_worker_all(kw):
     """Per-frame plot worker for combined multi-segment data."""
     global_idx      = kw['global_idx']
@@ -532,16 +633,16 @@ def _render_frame_worker_all(kw):
     if zlim is not None: zlim = tuple(v * coord_scale for v in zlim)
 
     try:
-        data_xy = BinaryData(xy_fpath)
-    except FileNotFoundError:
-        print(f"  Missing {xy_fpath}, skipping")
+        data_xy = _load_frame(xy_fpath)
+    except (FileNotFoundError, RuntimeError) as err:
+        print(f"  Cannot load {xy_fpath} ({err}), skipping")
         return
 
     data_xz = None
     if xz_fpath is not None:
         try:
-            data_xz = BinaryData(xz_fpath)
-        except FileNotFoundError:
+            data_xz = _load_frame(xz_fpath)
+        except (FileNotFoundError, RuntimeError):
             pass
 
     if derived is not None:
@@ -560,7 +661,14 @@ def _render_frame_worker_all(kw):
         var_name = abs_var
 
     if print_minmax:
-        print_stats(data_xy, var_name)
+        if isinstance(data_xy, GroupData):
+            _print_group_stats(data_xy, derived)
+        else:
+            print_stats(data_xy, var_name)
+
+    # Blocks / time live on the first dataset of a GroupData
+    base_xy = _base_dataset(data_xy)
+    base_xz = _base_dataset(data_xz) if data_xz is not None else None
 
     if data_xz is not None:
         fig = plt.figure(figsize=plot_style.figsize(2, 1, panel_w=4.5, panel_h=3.0))
@@ -574,10 +682,10 @@ def _render_frame_worker_all(kw):
         rescale_image_extents(ax_xy, coord_scale)
 
         if show_refinement:
-            draw_refinement_grid(ax_xz, data_xz, coord_scale=coord_scale)
-            draw_refinement_grid(ax_xy, data_xy, coord_scale=coord_scale)
+            draw_refinement_grid(ax_xz, base_xz, coord_scale=coord_scale)
+            draw_refinement_grid(ax_xy, base_xy, coord_scale=coord_scale)
         if show_trackers and trackers is not None:
-            draw_trackers(ax_xy, trackers, data_xy.time, coord_scale=coord_scale)
+            draw_trackers(ax_xy, trackers, base_xy.time, coord_scale=coord_scale)
 
         if xlim is not None: ax_xz.set_xlim(*xlim); ax_xy.set_xlim(*xlim)
         ax_xz.set_ylim(*zlim)
@@ -586,7 +694,7 @@ def _render_frame_worker_all(kw):
         ax_xz.set_xlabel(""); ax_xz.set_ylabel(rf"$z~[{coord_label}]$")
         ax_xy.set_xlabel(rf"$x~[{coord_label}]$")
         ax_xy.set_ylabel(rf"$y~[{coord_label}]$")
-        ax_xz.set_title(f"$t = {data_xy.time:.2f}~\\mathrm{{M}}_\\odot$")
+        ax_xz.set_title(f"$t = {base_xy.time:.2f}~\\mathrm{{M}}_\\odot$")
         if ylim is not None and coord_scale == 1.0:
             ax_xz.yaxis.set_major_locator(mpl.ticker.FixedLocator([0, 20, 40, 60]))
             ax_xy.yaxis.set_major_locator(mpl.ticker.FixedLocator([-60, -40, -20, 0, 20, 40]))
@@ -607,15 +715,15 @@ def _render_frame_worker_all(kw):
         fig.colorbar(pcm, cax=cax, label=label or var_name)
 
         if show_refinement:
-            draw_refinement_grid(ax, data_xy, coord_scale=coord_scale)
+            draw_refinement_grid(ax, base_xy, coord_scale=coord_scale)
         if show_trackers and trackers is not None:
-            draw_trackers(ax, trackers, data_xy.time, coord_scale=coord_scale)
+            draw_trackers(ax, trackers, base_xy.time, coord_scale=coord_scale)
 
         if xlim is not None: ax.set_xlim(*xlim)
         if ylim is not None: ax.set_ylim(*ylim)
         ax.set_xlabel(rf"$x~[{coord_label}]$")
         ax.set_ylabel(rf"$y~[{coord_label}]$")
-        ax.set_title(f"$t = {data_xy.time:.2f}~\\mathrm{{M}}_\\odot$")
+        ax.set_title(f"$t = {base_xy.time:.2f}~\\mathrm{{M}}_\\odot$")
         fig.tight_layout()
 
     fig.savefig(os.path.join(figpath, f"{out_prefix}_{global_idx:05d}.png"), dpi=200,
@@ -635,7 +743,8 @@ def render_frames_all(output_dirs, figpath, file_prefix, var_name,
                       use_abs=False,
                       derived=None,
                       coord_scale=1.0,
-                      coord_label=r"\mathrm{M}_\odot"):
+                      coord_label=r"\mathrm{M}_\odot",
+                      companion_prefix=None):
     """
     Render one PNG per deduplicated frame across all segments, in parallel.
     XZ prefix is auto-detected via '_xy' -> '_xz' substitution in file_prefix.
@@ -643,12 +752,24 @@ def render_frames_all(output_dirs, figpath, file_prefix, var_name,
     'derived', if given, is {'name', 'func', 'inputs'}: a derived variable
     (name must start with 'derived:') registered per frame from the listed
     input variables before plotting (e.g. |B| from bcc1/bcc2/bcc3).
+
+    'companion_prefix', if given, is a second xy output matched by time whose
+    variables are also available to 'derived' (e.g. fluid-frame n:s next to
+    the prim dens for Y_nu).
     """
-    xz_prefix = file_prefix.replace("_xy", "_xz") if "_xy" in file_prefix else None
-    frames = collect_combined_frames(output_dirs, file_prefix, xz_prefix, step)
+    xz_prefix = tuple(
+        prefix.replace("_xy", "_xz")
+        for prefix in _normalise_prefixes(file_prefix)
+        if "_xy" in prefix
+    ) or None
+    frames = collect_combined_frames(output_dirs, file_prefix, xz_prefix, step,
+                                     companion_prefix=companion_prefix)
 
     if not frames:
-        print(f"  No files found for prefix '{file_prefix}'")
+        if companion_prefix is not None:
+            print(f"  No frames with both '{file_prefix}' and '{companion_prefix}'")
+        else:
+            print(f"  No files found for prefix '{file_prefix}'")
         return
 
     if out_prefix is None:
@@ -834,8 +955,8 @@ def render_avg_energy_all(output_dirs, figpath, print_minmax=False,
     """
     _sc, _lb, _log, _lo, _hi = au.plot_params(var_key, units)
     _norm = LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi)
-    n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_N_xy", f"{JOBNAME}.rad_m1_N")
-    e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_E_xy", f"{JOBNAME}.rad_m1_E")
+    n_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_mom_xy", f"{JOBNAME}.rad_N_xy", f"{JOBNAME}.rad_m1_N")
+    e_prefix = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_mom_xy", f"{JOBNAME}.rad_E_xy", f"{JOBNAME}.rad_m1_E")
 
     t_to_n = _collect_frames_by_time(output_dirs, n_prefix)
     t_to_e = _collect_frames_by_time(output_dirs, e_prefix)
@@ -1056,6 +1177,8 @@ def parse_args():
                         choices=[
                             "history", "rho_max", "trackers", "run_speed",
                             "density", "temperature", "s00", "s00_avg",
+                            "ynue", "ynua", "ynux", "ynuax",
+                            "nu_y", "nu_y1", "nu_y2", "nu_y3",
                             "bnorm", "bmax",
                             "rad_E", "rad_N", "rad_N2", "rad_abs", "rad_abs0",
                             "rad_eta0", "rad_eta1", "avg_energy",
@@ -1111,12 +1234,12 @@ def main():
     trackers = load_trackers_all(output_dirs)
 
     # Auto-detect radiation file prefix scheme (new: bns.rad_E_xy, old: bns.rad_m1_E)
-    _RAD_E = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_E_xy",   f"{JOBNAME}.rad_m1_E")
-    _RAD_N = _detect_prefix_all(output_dirs, f"{JOBNAME}.rad_N_xy",   f"{JOBNAME}.rad_m1_N")
-    _ABS_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.abs_0_xy",   f"{JOBNAME}.rad_m1_abs_0")
-    _ABS_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.abs_1_xy",   f"{JOBNAME}.rad_m1_abs_1")
-    _ETA_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.eta_0_xy",   f"{JOBNAME}.rad_m1_eta_0")
-    _ETA_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.eta_1_xy",   f"{JOBNAME}.rad_m1_eta_1")
+    _RAD_E = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_mom_xy",  f"{JOBNAME}.rad_E_xy",   f"{JOBNAME}.rad_m1_E")
+    _RAD_N = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_mom_xy",  f"{JOBNAME}.rad_N_xy",   f"{JOBNAME}.rad_m1_N")
+    _ABS_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.abs_0_xy",   f"{JOBNAME}.rad_m1_abs_0")
+    _ABS_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.abs_1_xy",   f"{JOBNAME}.rad_m1_abs_1")
+    _ETA_0 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.eta_0_xy",   f"{JOBNAME}.rad_m1_eta_0")
+    _ETA_1 = _detect_prefix_all(output_dirs, f"{JOBNAME}.m1_opac_xy", f"{JOBNAME}.eta_1_xy",   f"{JOBNAME}.rad_m1_eta_1")
 
     XY_LIM = None if full_domain else (-60, 60)
 
@@ -1172,13 +1295,70 @@ def main():
         _sc, _lb, _log, _lo, _hi = au.plot_params('s_00', units)
         render_frames_all(output_dirs, figpath,
                           file_prefix=f"{JOBNAME}.prim_xy", var_name="s_00",
-                          cmap="plasma", vmin=0.0, vmax=0.2,
+                          cmap="plasma", vmin=0.0, vmax=0.5,
                           label=_lb, out_prefix=f"{JOBNAME}_frame_s00",
                           xlim=XY_LIM, ylim=XY_LIM,
                           print_minmax=True,
                           show_trackers=show_trackers, show_refinement=True,
                           trackers=trackers, skip_existing=skip_existing,
                           coord_scale=coord_scale, coord_label=coord_label)
+
+    # Neutrino fractions Y_nu = n_nu / n_b, analogous to Y_e.  Needs the
+    # fluid-frame M1 output (rad_m1_fluid_frame -> bns.m1ff_xy, var n:s) at the
+    # same times as bns.prim_xy.  Species: 0 nu_e, 1 anti-nu_e, 2 nu_x, 3 anti-nu_x.
+    _YNU_SECTIONS = [
+        ("ynue",  0, r"$Y_{\nu_e}$"),
+        ("ynua",  1, r"$Y_{\bar{\nu}_e}$"),
+        ("ynux",  2, r"$Y_{\nu_x}$"),
+        ("ynuax", 3, r"$Y_{\bar{\nu}_x}$"),
+    ]
+    for _sec, _sp, _sp_label in _YNU_SECTIONS:
+        if enabled(_sec):
+            print(f"[{_sec}] Rendering neutrino fraction {_sp_label} (species {_sp}) frames...")
+            _sc, _lb, _log, _lo, _hi = au.plot_params('Y_nu', units)
+            render_frames_all(output_dirs, figpath,
+                              file_prefix=f"{JOBNAME}.prim_xy",
+                              companion_prefix=f"{JOBNAME}.m1ff_xy",
+                              var_name=f"derived:Y_nu{_sp}",
+                              cmap="plasma",
+                              norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
+                              label=_sp_label, out_prefix=f"{JOBNAME}_frame_{_sec}",
+                              xlim=XY_LIM, ylim=XY_LIM,
+                              print_minmax=True,
+                              show_trackers=show_trackers, show_refinement=True,
+                              trackers=trackers, skip_existing=skip_existing,
+                              derived=dict(name=f"derived:Y_nu{_sp}",
+                                           func=_ynu_from_n_dens,
+                                           inputs=(f"n:{_sp}", "dens")),
+                              coord_scale=coord_scale, coord_label=coord_label)
+
+    # bns_nurates degeneracy parameter y (fallback to eq where y >= 64/81).
+    # Needs only the fluid-frame M1 output (bns.m1ff_xy, vars n:s and J:s).
+    _NU_Y_SECTIONS = [
+        ("nu_y",  0, r"$y_{\nu_e}$"),
+        ("nu_y1", 1, r"$y_{\bar{\nu}_e}$"),
+        ("nu_y2", 2, r"$y_{\nu_x}$"),
+        ("nu_y3", 3, r"$y_{\bar{\nu}_x}$"),
+    ]
+    for _sec, _sp, _sp_label in _NU_Y_SECTIONS:
+        if enabled(_sec):
+            print(f"[{_sec}] Rendering degeneracy parameter {_sp_label} (species {_sp}) "
+                  f"frames (fallback at y >= {au.NU_Y_FD_MAX:.4f})...")
+            _sc, _lb, _log, _lo, _hi = au.plot_params('nu_y', units)
+            render_frames_all(output_dirs, figpath,
+                              file_prefix=f"{JOBNAME}.m1ff_xy",
+                              var_name=f"derived:nu_y{_sp}",
+                              cmap="plasma",
+                              norm=LogNorm(vmin=_lo, vmax=_hi) if _log else Normalize(vmin=_lo, vmax=_hi),
+                              label=_sp_label, out_prefix=f"{JOBNAME}_frame_{_sec}",
+                              xlim=XY_LIM, ylim=XY_LIM,
+                              print_minmax=True,
+                              show_trackers=show_trackers, show_refinement=True,
+                              trackers=trackers, skip_existing=skip_existing,
+                              derived=dict(name=f"derived:nu_y{_sp}",
+                                           func=_nu_y_heavy if _sp >= 2 else _nu_y,
+                                           inputs=(f"n:{_sp}", f"J:{_sp}")),
+                              coord_scale=coord_scale, coord_label=coord_label)
 
     if enabled("bnorm"):
         print("[bnorm] Rendering magnetic field magnitude |B| frames...")

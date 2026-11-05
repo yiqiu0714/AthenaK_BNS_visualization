@@ -20,7 +20,7 @@ derivative).
 
 Command line:
     python3 analyze_accretion.py --simpath <sim> --analysis-dir <sim>/analysis \\
-        --r-ej 300 [--jobname bns] [--crit Ber]
+        --r-ej 200 [--jobname bns] [--crit Ber]
 """
 
 import argparse
@@ -72,7 +72,7 @@ def main(argv=None):
                         "accretion figure is written here too.")
     p.add_argument("--jobname", default="bns",
                    help="AthenaK job name prefixing the .hst files. Default: bns.")
-    p.add_argument("--r-ej", type=float, default=300.0,
+    p.add_argument("--r-ej", type=float, default=200.0,
                    help="Matter extraction radius [M_sun], must match the sph radius.")
     p.add_argument("--crit", choices=["geo", "Ber"], default="Ber",
                    help="Ejecta criterion. Default: Ber.")

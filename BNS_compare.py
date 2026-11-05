@@ -47,18 +47,18 @@ plot_style.use()  # central house style (see plot_style.py)
 # so it is only a valid fallback for xz-era runs.  For xy we require a genuine
 # *_xy slice dump (no spherical fallback), else the plane silently reports none.
 VAR_PREFIX = {
-    'eta_0': {'xz': ("bns.eta_0_xz", "bns.rad_m1_eta_0"),
-              'xy': ("bns.eta_0_xy", "bns.eta_0_xy")},
-    'eta_1': {'xz': ("bns.eta_1_xz", "bns.rad_m1_eta_1"),
-              'xy': ("bns.eta_1_xy", "bns.eta_1_xy")},
-    'abs_0': {'xz': ("bns.abs_0_xz", "bns.rad_m1_abs_0"),
-              'xy': ("bns.abs_0_xy", "bns.abs_0_xy")},
-    'abs_1': {'xz': ("bns.abs_1_xz", "bns.rad_m1_abs_1"),
-              'xy': ("bns.abs_1_xy", "bns.abs_1_xy")},
-    'E':     {'xz': ("bns.rad_E_xz", "bns.rad_m1_E"),
-              'xy': ("bns.rad_E_xy", "bns.rad_E_xy")},
-    'N':     {'xz': ("bns.rad_N_xz", "bns.rad_m1_N"),
-              'xy': ("bns.rad_N_xy", "bns.rad_N_xy")},
+    'eta_0': {'xz': ("bns.m1_opac_xz", "bns.eta_0_xz", "bns.rad_m1_eta_0"),
+              'xy': ("bns.m1_opac_xy", "bns.eta_0_xy")},
+    'eta_1': {'xz': ("bns.m1_opac_xz", "bns.eta_1_xz", "bns.rad_m1_eta_1"),
+              'xy': ("bns.m1_opac_xy", "bns.eta_1_xy")},
+    'abs_0': {'xz': ("bns.m1_opac_xz", "bns.abs_0_xz", "bns.rad_m1_abs_0"),
+              'xy': ("bns.m1_opac_xy", "bns.abs_0_xy")},
+    'abs_1': {'xz': ("bns.m1_opac_xz", "bns.abs_1_xz", "bns.rad_m1_abs_1"),
+              'xy': ("bns.m1_opac_xy", "bns.abs_1_xy")},
+    'E':     {'xz': ("bns.m1_mom_xz", "bns.rad_E_xz", "bns.rad_m1_E"),
+              'xy': ("bns.m1_mom_xy", "bns.rad_E_xy")},
+    'N':     {'xz': ("bns.m1_mom_xz", "bns.rad_N_xz", "bns.rad_m1_N"),
+              'xy': ("bns.m1_mom_xy", "bns.rad_N_xy")},
     # fluid fields live in the prim dump (no species suffix)
     'temperature': {'xz': ("bns.prim_xz", "bns.prim_xz"),
                     'xy': ("bns.prim_xy", "bns.prim_xy")},
@@ -89,32 +89,42 @@ def find_output_dirs(simpath):
     return ds if ds else [simpath]
 
 
-def detect_prefix(output_dirs, new_pref, old_pref):
-    for d in output_dirs:
-        if glob.glob(os.path.join(d, "bin", new_pref + ".*.bin")):
-            return new_pref
-        if glob.glob(os.path.join(d, "bin", old_pref + ".*.bin")):
-            return old_pref
-    return new_pref
+def _normalise_prefixes(prefixes):
+    if isinstance(prefixes, str):
+        return (prefixes,)
+    return tuple(prefixes)
+
+
+def detect_prefix(output_dirs, *prefixes):
+    """Keep candidates ordered; frames_by_time resolves each segment."""
+    if not prefixes:
+        raise ValueError("at least one output prefix is required")
+    return tuple(prefixes)
 
 
 _FRAME_CACHE = {}
 
 
-def frames_by_time(output_dirs, prefix):
-    """{rounded_time: filepath} across all segments (latest wins on dup)."""
-    key = (prefix, tuple(output_dirs))
+def frames_by_time(output_dirs, prefixes):
+    """{rounded_time: filepath}; newest naming is selected per segment."""
+    prefixes = _normalise_prefixes(prefixes)
+    key = (prefixes, tuple(output_dirs))
     if key in _FRAME_CACHE:
         return _FRAME_CACHE[key]
     tm = {}
     for d in output_dirs:
-        for f in sorted(glob.glob(os.path.join(d, "bin", prefix + ".*.bin"))):
-            try:
-                t = BinaryData(f).time
-            except Exception:
+        for prefix in prefixes:
+            files = sorted(glob.glob(os.path.join(d, "bin", prefix + ".*.bin")))
+            if not files:
                 continue
-            if np.isfinite(t):
-                tm[round(t, 1)] = f
+            for f in files:
+                try:
+                    t = BinaryData(f).time
+                except Exception:
+                    continue
+                if np.isfinite(t):
+                    tm[round(t, 1)] = f
+            break
     _FRAME_CACHE[key] = tm
     return tm
 

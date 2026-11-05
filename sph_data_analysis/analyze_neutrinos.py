@@ -1,14 +1,18 @@
 """
-Neutrino luminosity analysis from rad_m1_F / rad_m1_E / rad_m1_N spherical-surface
-VTK outputs of AthenaK BNS simulations.
+Neutrino luminosity analysis from grouped rad_m1_moments or legacy
+rad_m1_F / rad_m1_E / rad_m1_N spherical-surface VTK outputs.
 
-Per snapshot, loads 8 VTK files:
-  bns.r=R.rad_m1_F.NNNNN.vtk  — Fx:s, Fy:s, Fz:s  (Eulerian energy-flux per species)
-  bns.r=R.rad_m1_E.NNNNN.vtk  — E:s                (Eulerian energy density per species)
-  bns.r=R.rad_m1_N.NNNNN.vtk  — N:s                (number density per species)
+Per snapshot, loads one grouped M1 file:
+  bns.r=R.rad_m1_moments.NNNNN.vtk — E:s, N:s, Fx:s, Fy:s, Fz:s (all species)
+  (older runs: bns.r=R.m1_mom.NNNNN.vtk, or split rad_m1_E/F/N files)
+Legacy segments with three separate rad_m1_F / E / N files remain supported.
   bns.r=R.adm.NNNNN.vtk       — adm_gxx..gyz       (ADM 3-metric)
-  bns.r=R.z4c_alpha.NNNNN.vtk — z4c_alpha           (lapse)
-  bns.r=R.z4c_beta*.NNNNN.vtk — z4c_beta*           (shift)
+  bns.r=R.z4c_gauge.NNNNN.vtk — z4c_alpha, z4c_beta* (lapse and shift)
+  (older runs: split z4c_alpha / z4c_betax / z4c_betay / z4c_betaz files)
+
+R is either a single radius ('r=300.00') or, in newer output, a range
+('r=100.00-500.00') holding many shells in one file; sph_vtk auto-detects
+which style is on disk and extracts the shell nearest RADIUS.
 
 Physics
 -------
@@ -43,27 +47,16 @@ Species ordering (M1_TOTAL_NUM_SPECIES = 4):
 Note: in bns_nurates, species 2 and 3 are symmetric (nux = anux).  The code
 stores each separately; both are output here.
 
-Required parfile output blocks (add for each desired radius):
+Required parfile output block (add for each desired radius):
     <outputXX>
     file_type  = sph
-    variable   = rad_m1_F
-    dt         = 5.0
+    variable   = rad_m1_moments
+    dt         = 50.0
     radius     = 400.0
     ntheta     = 256
+    id         = m1_mom
 
-    <outputXX+1>
-    file_type  = sph
-    variable   = rad_m1_E
-    dt         = 5.0
-    radius     = 400.0
-    ntheta     = 256
-
-    <outputXX+2>
-    file_type  = sph
-    variable   = rad_m1_N
-    dt         = 5.0
-    radius     = 400.0
-    ntheta     = 256
+The three legacy rad_m1_F / rad_m1_E / rad_m1_N blocks are also supported.
 
 Output files (written to OUTPUT_DIR):
     Lnu_E_{sp}.txt        time, energy luminosity per species [M_sun], [erg/s]
@@ -75,7 +68,10 @@ Output files (written to OUTPUT_DIR):
 import os
 import sys
 import numpy as np
+import inspect
 from multiprocessing import Pool, cpu_count
+
+from snapshot_cache import SnapshotCache, TimeIndexCache, stamp as _src_stamp
 
 SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
 # plot-tools submodule lives at the repository root (one level above this folder).
@@ -84,7 +80,9 @@ _PLOTTOOLS = os.environ.get(
 sys.path.append(_PLOTTOOLS)
 sys.path.append(SCRIPTDIR)  # utils_ejecta.py lives alongside this script
 
-from athplot.load_sph_vtk import SphericalData
+from sph_vtk import (SphericalData, set_default_radius, resolve_styles,
+                     describe_styles, read_time, open_set,
+                     M1_GROUPED_VARS)
 from athplot.utils.units import conv_luminosity, conv_energy, cactus, cgs
 from utils_ejecta import sum_over_time
 
@@ -115,6 +113,18 @@ OUTPUT_DIR = os.path.join('output', SIM_NAME)
 # Set to 1 to disable multiprocessing (easier debugging).
 N_WORKERS = min(8, cpu_count())
 
+# Reuse per-snapshot results cached under OUTPUT_DIR/cache/ from earlier runs,
+# and only process snapshots never seen before (see snapshot_cache.py). The
+# reduction below always re-runs over cached + new results together, so outputs
+# are identical either way. Set False (or SPH_CACHE=0 in run_analysis.sh) to
+# force every snapshot to be recomputed.
+USE_CACHE = True
+
+# Process every STRIDE-th snapshot (1 = all).  Long runs can have thousands of
+# snapshots; raise this so the loop stays tractable (luminosity curves stay
+# smooth at STRIDE 5-10).  Set from run_analysis.sh.
+STRIDE = 1
+
 
 # ===================================================================
 # Constants
@@ -141,10 +151,10 @@ N_CODE_PER_FM3 = (_G_SI * _M_SUN_KG / _C_SI**2 * _FM_PER_M)**3  # ≈ 3.222e54
 # Main analysis
 # ===================================================================
 
-def _build_time_list(sph_dir, r_str, prefix):
+def _build_time_list(sph_dir, style, prefix):
     """Return sorted list of (time_float, path) for all matching VTK files."""
     result = []
-    pat = f'bns.{r_str}.{prefix}.'
+    pat = os.path.basename(style.prefix(sph_dir)) + f'{prefix}.'
     for fname in os.listdir(sph_dir):
         if fname.startswith(pat) and fname.endswith('.vtk'):
             path = os.path.join(sph_dir, fname)
@@ -158,6 +168,73 @@ def _build_time_list(sph_dir, r_str, prefix):
                     break
     result.sort(key=lambda x: x[0])
     return result
+
+
+def _read_vtk_time(path):
+    """Header time of one spherical-surface VTK, or None. Reads 2 lines only."""
+    try:
+        with open(path, 'r', encoding='latin_1') as f:
+            f.readline()
+            meta = f.readline()
+    except OSError:
+        return None
+    for tok in meta.split():
+        if tok.startswith('time='):
+            return float(tok[5:])
+    return None
+
+
+def _build_time_lists(styles, prefixes, cache=None):
+    """Sorted (time, path) lists for several prefixes at once.
+
+    One os.scandir per directory covers ALL prefixes -- the old code called
+    _build_time_list once per prefix, i.e. five full listings of directories
+    holding tens of thousands of files. Header reads are served from `cache`
+    when the file is unchanged, which is what makes a resumed job cheap.
+    """
+    out = {p: [] for p in prefixes}
+    for d, style in styles.items():
+        # Both the radius tag and the variable grouping can differ between
+        # segments, so rebuild the filename patterns for each directory.
+        # Several logical fields can map to one file (z4c_gauge holds the
+        # lapse and all three shift components), so one filename may feed
+        # more than one entry of `out`.
+        base = os.path.basename(style.prefix(d))
+        pats = {}
+        for p in prefixes:
+            var = style.var_for(p)
+            if var is not None:
+                pats[p] = base + f'{var}.'
+        try:
+            entries = list(os.scandir(d))
+        except OSError:
+            continue
+        for e in entries:
+            name = e.name
+            if not name.endswith('.vtk'):
+                continue
+            matched = [p for p in prefixes
+                       if p in pats and name.startswith(pats[p])]
+            if matched:
+                t = None
+                if cache is not None:
+                    try:
+                        st = e.stat()
+                        t = cache.lookup(e.path, st.st_size, st.st_mtime_ns)
+                    except OSError:
+                        st = None
+                    if t is None:
+                        t = _read_vtk_time(e.path)
+                        if t is not None and st is not None:
+                            cache.put(e.path, st.st_size, st.st_mtime_ns, t)
+                else:
+                    t = _read_vtk_time(e.path)
+                if t is not None:
+                    for p in matched:
+                        out[p].append((t, e.path))
+    for p in prefixes:
+        out[p].sort(key=lambda x: x[0])
+    return out
 
 
 def _nearest_path(time_list, t, tol=4.0):
@@ -244,19 +321,24 @@ def _process_snapshot(args):
      theta_edges) = args
 
     import numpy as _np
-    from athplot.load_sph_vtk import SphericalData as _SD
+    from sph_vtk import open_set as _open_set
     from athplot.utils.units import conv_luminosity as _conv_lum, \
                                     conv_energy as _conv_e, \
                                     cactus as _cactus, cgs as _cgs
 
-    flux_vtk  = _SD(flux_path)
-    ener_vtk  = _SD(ener_path)
-    nden_vtk  = _SD(nden_path)
-    adm_vtk   = _SD(adm_path)
-    alpha_vtk = _SD(alpha_path)
-    betax_vtk = _SD(betax_path)
-    betay_vtk = _SD(betay_path)
-    betaz_vtk = _SD(betaz_path)
+    # With the grouped output format E/N/F share one rad_m1_moments file and
+    # the lapse and shift share one z4c_gauge file, so these paths are not all
+    # distinct; open_set reads each file exactly once.
+    _vtk = _open_set((flux_path, ener_path, nden_path, adm_path,
+                      alpha_path, betax_path, betay_path, betaz_path))
+    flux_vtk  = _vtk[flux_path]
+    ener_vtk  = _vtk[ener_path]
+    nden_vtk  = _vtk[nden_path]
+    adm_vtk   = _vtk[adm_path]
+    alpha_vtk = _vtk[alpha_path]
+    betax_vtk = _vtk[betax_path]
+    betay_vtk = _vtk[betay_path]
+    betaz_vtk = _vtk[betaz_path]
 
     time  = flux_vtk.time
     radius = flux_vtk.r
@@ -342,51 +424,71 @@ def _process_snapshot(args):
             'Eav': Eav_list, 'dLdtheta': dLdtheta_list}
 
 
+def _cached_worker_neutrino(pair):
+    """(index, args) -> (index, result). Lets imap_unordered stay unordered
+    while still telling us which snapshot each result belongs to."""
+    idx, args = pair
+    r = _process_snapshot(args)
+    r['_src'] = _src_stamp(args[0])      # args[0] = this snapshot's flux VTK
+    return idx, r
+
+
 def main():
     # ------------------------------------------------------------------
-    # Build snapshot index: scan for rad_m1_F files (the new M1 output).
-    # adm / z4c_alpha may use a different counter series (different restart
-    # offset) but cover the same simulation times, so we match by time.
+    # Build snapshot index.  New segments store E/N/F together in m1_mom;
+    # legacy segments use three rad_m1_* files.  Resolve the format per
+    # directory so one analysis can span the transition.
     # ------------------------------------------------------------------
-    r_str = f'r={RADIUS:.2f}'
+    # Auto-detect the sph output style: one radius per file
+    # ('bns.r=300.00.m1_mom.NNNNN.vtk') or a whole range packed into one
+    # ('bns.r=100.00-500.00.m1_mom.NNNNN.vtk'), from which the shell nearest
+    # RADIUS is extracted.  Resolved per directory so a run that switched
+    # format between segments still analyses end to end.
+    set_default_radius(RADIUS)
+    # var='rad_m1_F' only constrains which radius tag is eligible: it matches
+    # any of rad_m1_F / m1_mom / rad_m1_moments, so a radius is considered
+    # only if it actually has M1 output there.
+    styles = resolve_styles(SPH_DIR_LIST, radius=RADIUS, var='rad_m1_F')
+    print(describe_styles(styles, RADIUS))
 
     m1_index_map = {}
-    for d in SPH_DIR_LIST:
-        if not os.path.exists(d):
-            continue
-        for fname in os.listdir(d):
-            if fname.startswith(f'bns.{r_str}.rad_m1_F.') and fname.endswith('.vtk'):
-                idx = int(fname.split('.')[-2])
-                m1_index_map[idx] = d
+    for d, style in styles.items():
+        names = os.listdir(d)
+        # Scan legacy first so a grouped file wins if both exist for an index.
+        for prefix in ("rad_m1_F",) + M1_GROUPED_VARS:
+            pattern = os.path.basename(style.prefix(d)) + f"{prefix}."
+            for fname in names:
+                if fname.startswith(pattern) and fname.endswith(".vtk"):
+                    idx = int(fname.split(".")[-2])
+                    m1_index_map[idx] = (d, prefix)
 
-    indices = sorted(m1_index_map.keys())
-    print(f"Found {len(indices)} rad_m1_F snapshots at r={RADIUS} M_sun")
-    if len(indices) == 0:
+    indices = sorted(m1_index_map)[:: max(1, STRIDE)]
+    grouped_count = sum(m1_index_map[i][1] in M1_GROUPED_VARS
+                        for i in indices)
+    legacy_count = len(indices) - grouped_count
+    print(f"Found {len(indices)} M1 snapshots at r={RADIUS} M_sun "
+          f"({grouped_count} grouped, {legacy_count} legacy; STRIDE={STRIDE})")
+    if not indices:
         raise RuntimeError(
-            f"No rad_m1_F VTK files found in {SPH_DIR_LIST}.\n"
-            "Add 'variable = rad_m1_F / rad_m1_E / rad_m1_N' sph output blocks to the parfile."
+            f"No rad_m1_moments / m1_mom / rad_m1_F VTK files found in "
+            f"{SPH_DIR_LIST}.\n"
+            "Add a rad_m1_moments sph output block (or the three legacy "
+            "rad_m1_F / rad_m1_E / rad_m1_N blocks) to the parfile."
         )
 
     # Build sorted time lists for adm and z4c gauge outputs (counter may differ)
     print("Building time index for adm / z4c gauge files...")
-    adm_times    = []
-    alpha_times  = []
-    betax_times  = []
-    betay_times  = []
-    betaz_times  = []
-    for d in SPH_DIR_LIST:
-        if not os.path.exists(d):
-            continue
-        adm_times.extend(_build_time_list(d, r_str, 'adm'))
-        alpha_times.extend(_build_time_list(d, r_str, 'z4c_alpha'))
-        betax_times.extend(_build_time_list(d, r_str, 'z4c_betax'))
-        betay_times.extend(_build_time_list(d, r_str, 'z4c_betay'))
-        betaz_times.extend(_build_time_list(d, r_str, 'z4c_betaz'))
-    adm_times.sort(key=lambda x: x[0])
-    alpha_times.sort(key=lambda x: x[0])
-    betax_times.sort(key=lambda x: x[0])
-    betay_times.sort(key=lambda x: x[0])
-    betaz_times.sort(key=lambda x: x[0])
+    _tidx = TimeIndexCache(OUTPUT_DIR, f'timeindex-r{RADIUS:g}', enabled=USE_CACHE)
+    _lists = _build_time_lists(
+        styles,
+        ('adm', 'z4c_alpha', 'z4c_betax', 'z4c_betay', 'z4c_betaz'), _tidx)
+    _tidx.save()
+    print(f"  [timeindex] {_tidx.hits} header read(s) reused, {_tidx.misses} read from disk")
+    adm_times   = _lists['adm']
+    alpha_times = _lists['z4c_alpha']
+    betax_times = _lists['z4c_betax']
+    betay_times = _lists['z4c_betay']
+    betaz_times = _lists['z4c_betaz']
     print(f"  adm files:       {len(adm_times)}")
     print(f"  z4c_alpha files: {len(alpha_times)}")
     print(f"  z4c_beta  files: {len(betax_times)}")
@@ -395,9 +497,14 @@ def main():
     # Build theta bins for dL/dtheta diagnostics.  Surface integrals use the
     # native AthenaK SPH weights stored in each VTK file.
     # ------------------------------------------------------------------
-    first_flux_path = os.path.join(
-        m1_index_map[indices[0]], f'bns.{r_str}.rad_m1_F.{indices[0]:05d}.vtk')
-    _fv = SphericalData(first_flux_path)
+    first_dir, first_prefix = m1_index_map[indices[0]]
+    first_flux_path = styles[first_dir].path(
+        first_dir, first_prefix, indices[0])
+    _fv = SphericalData(first_flux_path, radius=RADIUS)
+    R_ACTUAL = float(_fv.r)
+    if abs(R_ACTUAL - RADIUS) > 1e-6:
+        print(f"  [radius] nearest available shell is r={R_ACTUAL:.4f} M_sun "
+              f"(requested {RADIUS:g}); all integrals use r={R_ACTUAL:.4f}")
     theta_1d        = _fv.theta[0, :]
     theta_1d_sorted = np.sort(theta_1d)
     theta_edges     = np.concatenate([[0.0],
@@ -407,7 +514,7 @@ def main():
     del _fv
 
     # dup check on first snapshot with alpha
-    _t0 = SphericalData(first_flux_path).time
+    _t0 = read_time(first_flux_path)
     _ap = _nearest_path(alpha_times, _t0)
     if _ap:
         _av = SphericalData(_ap)
@@ -417,13 +524,32 @@ def main():
     # ------------------------------------------------------------------
     # Build worker argument list (pre-resolve adm/alpha paths by time)
     # ------------------------------------------------------------------
-    worker_args = []
-    skipped = 0
+    # ------------------------------------------------------------------
+    # Incremental cache: reuse per-snapshot results computed by earlier runs.
+    # This also skips the SERIAL SphericalData(flux_path).time header read
+    # below, which on its own costs one file open per snapshot.
+    # ------------------------------------------------------------------
+    cache = SnapshotCache(
+        OUTPUT_DIR, 'neutrino',
+        params={'radius': RADIUS, 'r_actual': R_ACTUAL,
+                'theta_edges': [float(x) for x in theta_edges],
+                'species': list(SPECIES)},
+        sources=(inspect.getsource(_process_snapshot),),
+        enabled=USE_CACHE)
+    cached = cache.load()
+
+    results   = []
+    jobs      = []
+    skipped   = 0
     for index in indices:
-        sph_dir = m1_index_map[index]
-        pfx     = os.path.join(sph_dir, f'bns.{r_str}.')
-        flux_path = pfx + f'rad_m1_F.{index:05d}.vtk'
-        t_flux = SphericalData(flux_path).time   # read header only via VTK
+        sph_dir, m1_prefix = m1_index_map[index]
+        pfx = styles[sph_dir].prefix(sph_dir)
+        flux_path = pfx + f"{m1_prefix}.{index:05d}.vtk"
+        rec = cached.get(index)
+        if rec is not None and rec.get('_src') == _src_stamp(flux_path):
+            results.append(rec)          # note: skips the header read below
+            continue
+        t_flux = read_time(flux_path)   # 2-line header read, no data
         adm_path   = _nearest_path(adm_times,   t_flux)
         alpha_path = _nearest_path(alpha_times, t_flux)
         bx_path    = _nearest_path(betax_times, t_flux)
@@ -433,27 +559,44 @@ def main():
                 by_path is None or bz_path is None):
             skipped += 1
             continue
-        worker_args.append((
+        if m1_prefix in M1_GROUPED_VARS:
+            ener_path = nden_path = flux_path
+        else:
+            ener_path = styles[sph_dir].path_for(sph_dir, 'rad_m1_E', index)
+            nden_path = styles[sph_dir].path_for(sph_dir, 'rad_m1_N', index)
+        jobs.append((index, (
             flux_path,
-            pfx + f'rad_m1_E.{index:05d}.vtk',
-            pfx + f'rad_m1_N.{index:05d}.vtk',
+            ener_path,
+            nden_path,
             adm_path, alpha_path,
             bx_path, by_path, bz_path,
             theta_edges,
-        ))
+        )))
     if skipped:
         print(f"  [skip] {skipped} snapshots with no adm/alpha/beta match")
-    print(f"Processing {len(worker_args)} snapshots with N_WORKERS={N_WORKERS}...")
+    print(cache.describe(len(results), len(jobs)))
 
     # ------------------------------------------------------------------
-    # Parallel snapshot loop
+    # Parallel snapshot loop (new snapshots only)
     # ------------------------------------------------------------------
-    if N_WORKERS > 1:
-        with Pool(N_WORKERS) as pool:
-            results = list(pool.imap_unordered(_process_snapshot, worker_args,
-                                               chunksize=max(1, len(worker_args) // (N_WORKERS * 4))))
-    else:
-        results = [_process_snapshot(a) for a in worker_args]
+    if jobs:
+        print(f"Processing {len(jobs)} snapshots with N_WORKERS={N_WORKERS}...")
+        if N_WORKERS > 1:
+            with Pool(N_WORKERS) as pool:
+                for idx, r in pool.imap_unordered(
+                        _cached_worker_neutrino, jobs,
+                        chunksize=max(1, len(jobs) // (N_WORKERS * 4))):
+                    cache.add(idx, r)      # flushed every CHUNK -> a kill here
+                    results.append(r)      # costs at most CHUNK snapshots
+        else:
+            for idx, args in jobs:
+                _, r = _cached_worker_neutrino((idx, args))
+                cache.add(idx, r)
+                results.append(r)
+        cache.flush()
+
+    if not results:
+        raise SystemExit('No snapshots to analyze.')
 
     # Progress summary
     results.sort(key=lambda x: x['time'])

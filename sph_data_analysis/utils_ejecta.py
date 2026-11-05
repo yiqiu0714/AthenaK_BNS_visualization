@@ -10,7 +10,7 @@ import sys
 _PLOTTOOLS = os.environ.get(
     "ATHPLOT_PATH", os.path.abspath(os.path.join(SCRIPTDIR, os.pardir, "plot-tools")))
 sys.path.append(_PLOTTOOLS)
-from athplot.load_sph_vtk import SphericalData
+from sph_vtk import SphericalData  # noqa: F401 (re-exported for callers)
 
 def integrate_over_phi(integrand, phi):
     integral_phi = simpson(y=integrand, x=phi, axis=0)

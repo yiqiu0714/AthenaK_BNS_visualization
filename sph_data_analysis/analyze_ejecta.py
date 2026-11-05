@@ -17,7 +17,10 @@ Outputs:
 
 import os
 import sys
+import inspect
 from multiprocessing import Pool, cpu_count
+
+from snapshot_cache import SnapshotCache, stamp as _src_stamp
 import numpy as np
 from scipy.integrate import simpson
 import h5py
@@ -30,7 +33,8 @@ _PLOTTOOLS = os.environ.get(
 sys.path.append(_PLOTTOOLS)
 sys.path.append(SCRIPTDIR)  # utils_ejecta.py lives alongside this script
 
-from athplot.load_sph_vtk import SphericalData
+from sph_vtk import (SphericalData, set_default_radius, resolve_styles,
+                     describe_styles, open_set)
 from athplot.utils.units import conv_dens, cactus, cgs
 from utils_ejecta import (calc_ur, sqrt_det_metric_adm, get_riemann_weights,
                           sum_over_time)
@@ -53,7 +57,7 @@ EOS_TABLE_PATH = '../PyCompOSE/examples/DD2/DD2.h5'
 
 # --- SPH extraction radius [code units, M_sun] ---
 # Must match a radius that has mhd_w_bcc/adm/z4c sph output in the parfile.
-RADIUS = 300.0
+RADIUS = 200.0
 
 # --- Density floor [g/cm^3] ---
 DFLOOR = 3e-15
@@ -72,6 +76,17 @@ V_CENTERS = 0.5 * (V_BINS[:-1] + V_BINS[1:])
 
 # --- Parallelism ---
 N_WORKERS = min(8, cpu_count())
+
+# Reuse per-snapshot results cached under OUTPUT_DIR/cache/ from earlier runs,
+# and only process snapshots never seen before (see snapshot_cache.py). The
+# reduction below always re-runs over cached + new results together, so outputs
+# are identical either way. Set False (or SPH_CACHE=0 in run_analysis.sh) to
+# force every snapshot to be recomputed.
+USE_CACHE = True
+
+# Process every STRIDE-th snapshot (1 = all).  Raise for very long runs so the
+# snapshot loop stays tractable.  Set from run_analysis.sh.
+STRIDE = 1
 
 # --- Electron fraction (Y_e) bins ---
 DYE      = 0.01
@@ -149,11 +164,19 @@ _W_EOS     = None
 _W_MN_GRAM = None
 
 
-def _init_ejecta_worker(eos, mn_gram):
-    """Pool initializer: load EOS into each worker process once."""
+def _init_ejecta_worker(eos, mn_gram, radius=None):
+    """Pool initializer: load EOS into each worker process once.
+
+    Also re-applies the surface radius, so the shell picked out of a
+    multi-radius VTK dump is the same one the parent chose even when the
+    pool is started with 'spawn' rather than 'fork'.
+    """
     global _W_EOS, _W_MN_GRAM
     _W_EOS     = eos
     _W_MN_GRAM = mn_gram
+    if radius is not None:
+        from sph_vtk import set_default_radius as _srd
+        _srd(radius)
 
 
 def _process_snapshot_ejecta(args):
@@ -162,7 +185,7 @@ def _process_snapshot_ejecta(args):
      riemann_weights, theta_edges, dfloor, t_stop) = args
 
     import numpy as _np
-    from athplot.load_sph_vtk import SphericalData as _SD
+    from sph_vtk import open_set as _open_set
     from utils_ejecta import (calc_ur as _calc_ur,
                               sqrt_det_metric_adm as _sqrt_det)
     from scipy.interpolate import RegularGridInterpolator  # noqa: F401 (already imported)
@@ -172,12 +195,17 @@ def _process_snapshot_ejecta(args):
     eos     = _W_EOS
     mn_gram = _W_MN_GRAM
 
-    mhd   = _SD(mhd_path)
-    adm   = _SD(adm_path)
-    alpha = _SD(alpha_path)
-    betax = _SD(betax_path)
-    betay = _SD(betay_path)
-    betaz = _SD(betaz_path)
+    # In the grouped output format the lapse and all three shift components
+    # live in the same z4c_gauge file, so these paths are not all distinct;
+    # open_set reads each file exactly once.
+    _vtk  = _open_set((mhd_path, adm_path, alpha_path,
+                       betax_path, betay_path, betaz_path))
+    mhd   = _vtk[mhd_path]
+    adm   = _vtk[adm_path]
+    alpha = _vtk[alpha_path]
+    betax = _vtk[betax_path]
+    betay = _vtk[betay_path]
+    betaz = _vtk[betaz_path]
 
     time  = mhd.time
     r     = mhd.r
@@ -306,30 +334,50 @@ def _process_snapshot_ejecta(args):
     return result
 
 
+def _cached_worker_ejecta(pair):
+    """(index, args) -> (index, result). Lets imap_unordered stay unordered
+    while still telling us which snapshot each result belongs to."""
+    idx, args = pair
+    r = _process_snapshot_ejecta(args)
+    r['_src'] = _src_stamp(args[0])      # args[0] = this snapshot's mhd VTK
+    return idx, r
+
+
 def main():
     # ------------------------------------------------------------------
     # Build snapshot index and Riemann weights from first snapshot
     # ------------------------------------------------------------------
-    r_str = f'r={RADIUS:.2f}'
+    # Auto-detect the sph output style.  Older runs write one radius per file
+    # ('bns.r=300.00.adm.NNNNN.vtk'); newer ones pack a range of radii into a
+    # single file ('bns.r=100.00-500.00.adm.NNNNN.vtk'), from which the shell
+    # nearest RADIUS is extracted.  Resolved per directory so a run that
+    # switched format between segments still analyses end to end.
+    set_default_radius(RADIUS)
+    styles = resolve_styles(SPH_DIR_LIST, radius=RADIUS, var='adm')
+    print(describe_styles(styles, RADIUS))
+
     index_map = {}
-    for d in SPH_DIR_LIST:
-        if not os.path.exists(d):
-            continue
+    for d, style in styles.items():
+        pat = os.path.basename(style.prefix(d)) + 'adm.'
         for fname in os.listdir(d):
-            if fname.startswith(f'bns.{r_str}.adm.'):
+            if fname.startswith(pat) and fname.endswith('.vtk'):
                 idx = int(fname.split('.')[-2])
                 index_map[idx] = d
 
-    indices = sorted(index_map.keys())
-    print(f"Found {len(indices)} snapshots. Loading EOS and grid...")
+    indices = sorted(index_map.keys())[:: max(1, STRIDE)]
+    print(f"Found {len(indices)} snapshots (STRIDE={STRIDE}). Loading EOS and grid...")
 
-    eos     = load_eos(EOS_TABLE_PATH)
-    mn_gram = eos['mn_mev'] * cgs.eV * 1e6 / cgs.light_speed**2
+    # (EOS is loaded further down, only if there are snapshots to process.)
 
     # Compute Riemann weights and theta grid from first snapshot's geometry
     _first_dir = index_map[indices[0]]
     _first_mhd = SphericalData(
-        os.path.join(_first_dir, f'bns.{r_str}.mhd_w_bcc.{indices[0]:05d}.vtk'))
+        styles[_first_dir].path(_first_dir, 'mhd_w_bcc', indices[0]),
+        radius=RADIUS)
+    R_ACTUAL = float(_first_mhd.r)
+    if abs(R_ACTUAL - RADIUS) > 1e-6:
+        print(f"  [radius] nearest available shell is r={R_ACTUAL:.4f} M_sun "
+              f"(requested {RADIUS:g}); all integrals use r={R_ACTUAL:.4f}")
     theta_1d        = _first_mhd.theta[0, :]
     phi_1d          = _first_mhd.phi[:, 0]
     riemann_weights = get_riemann_weights(
@@ -344,34 +392,86 @@ def main():
     # ------------------------------------------------------------------
     # Build worker argument list
     # ------------------------------------------------------------------
+    _EJECTA_FIELDS = ('mhd_w_bcc', 'adm', 'z4c_alpha',
+                      'z4c_betax', 'z4c_betay', 'z4c_betaz')
+
     def _paths(d, idx):
-        p = os.path.join(d, f'bns.{r_str}.')
-        return (p+f'mhd_w_bcc.{idx:05d}.vtk',
-                p+f'adm.{idx:05d}.vtk',
-                p+f'z4c_alpha.{idx:05d}.vtk',
-                p+f'z4c_betax.{idx:05d}.vtk',
-                p+f'z4c_betay.{idx:05d}.vtk',
-                p+f'z4c_betaz.{idx:05d}.vtk')
-
-    worker_args = [
-        _paths(index_map[i], i) + (riemann_weights, theta_edges, DFLOOR, T_STOP)
-        for i in indices
-    ]
-    print(f"Processing {len(worker_args)} snapshots with N_WORKERS={N_WORKERS}...")
+        # Which file provides each field depends on the output style: the old
+        # format wrote one file per z4c gauge variable, the new one groups
+        # them into z4c_gauge, so several of these paths can coincide.
+        st = styles[d]
+        out = []
+        for field in _EJECTA_FIELDS:
+            path = st.path_for(d, field, idx)
+            if path is None:
+                raise RuntimeError(
+                    f"No sph output providing '{field}' in {d} "
+                    f"(found: {sorted(st.variables)})")
+            out.append(path)
+        return tuple(out)
 
     # ------------------------------------------------------------------
-    # Parallel snapshot loop
+    # Incremental cache: reuse per-snapshot results computed by earlier runs.
+    # The key covers every input that can change a per-snapshot number, so a
+    # different radius / floor / EOS / grid / worker source starts a new cache.
     # ------------------------------------------------------------------
-    if N_WORKERS > 1:
-        with Pool(N_WORKERS,
-                  initializer=_init_ejecta_worker,
-                  initargs=(eos, mn_gram)) as pool:
-            results = list(pool.imap_unordered(
-                _process_snapshot_ejecta, worker_args,
-                chunksize=max(1, len(worker_args) // (N_WORKERS * 4))))
-    else:
-        _init_ejecta_worker(eos, mn_gram)
-        results = [_process_snapshot_ejecta(a) for a in worker_args]
+    cache = SnapshotCache(
+        OUTPUT_DIR, 'ejecta',
+        params={'radius': RADIUS, 'r_actual': R_ACTUAL, 'dfloor': DFLOOR, 'eos_table': EOS_TABLE_PATH,
+                'v_bins': V_BINS.tolist(), 'ye_bins': YE_BINS.tolist(),
+                'theta_edges': [float(x) for x in theta_edges]},
+        sources=(inspect.getsource(_process_snapshot_ejecta),),
+        enabled=USE_CACHE)
+    cached = cache.load()
+
+    # A cached record is only reusable if it already holds the 2-D histograms
+    # this run needs. T_STOP (i.e. the merger time) is NOT part of the cache
+    # key, so a snapshot cached while it was outside the post-merger window has
+    # no histograms and must be redone if the window now includes it.
+    results, jobs = [], []
+    for i in indices:
+        args = _paths(index_map[i], i) + (riemann_weights, theta_edges,
+                                          DFLOOR, T_STOP)
+        rec  = cached.get(i)
+        if (rec is not None
+                and rec.get('_src') == _src_stamp(args[0])     # same input file
+                and (rec['time'] > T_STOP or 'hist2d_geo' in rec)):
+            results.append(rec)
+        else:
+            jobs.append((i, args))
+    print(cache.describe(len(results), len(jobs)))
+
+    # ------------------------------------------------------------------
+    # Parallel snapshot loop (new snapshots only)
+    # ------------------------------------------------------------------
+    if jobs:
+        eos     = load_eos(EOS_TABLE_PATH)
+        mn_gram = eos['mn_mev'] * cgs.eV * 1e6 / cgs.light_speed**2
+        print(f"Processing {len(jobs)} snapshots with N_WORKERS={N_WORKERS}...")
+        if N_WORKERS > 1:
+            with Pool(N_WORKERS,
+                      initializer=_init_ejecta_worker,
+                      initargs=(eos, mn_gram, RADIUS)) as pool:
+                for idx, r in pool.imap_unordered(
+                        _cached_worker_ejecta, jobs,
+                        chunksize=max(1, len(jobs) // (N_WORKERS * 4))):
+                    cache.add(idx, r)      # flushed every CHUNK -> a kill here
+                    results.append(r)      # costs at most CHUNK snapshots
+        else:
+            _init_ejecta_worker(eos, mn_gram)
+            for idx, args in jobs:
+                _, r = _cached_worker_ejecta((idx, args))
+                cache.add(idx, r)
+                results.append(r)
+        cache.flush()
+
+    if not results:
+        raise SystemExit('No snapshots to analyze.')
+
+    # in_2d is re-derived from the CURRENT T_STOP: a cached record may carry the
+    # flag from a run with a different merger time, and must not be trusted.
+    for r in results:
+        r['in_2d'] = r['time'] <= T_STOP
 
     results.sort(key=lambda r: r['time'])
 

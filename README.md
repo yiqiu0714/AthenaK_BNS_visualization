@@ -21,7 +21,9 @@ vorticity, and the Q-criterion.
 | `BNS_all.py` | Main visualization driver. Fully configurable via command-line flags (`--help`). File names are keyed on `--jobname` (default `bns`), so the same driver serves BNS/BHNS/BBH runs; each frame series is written to its own `Figs/<name>_xy/` subfolder, and sections whose input files are absent are skipped. |
 | `BNS_all.sh` | Convenience wrapper: reads paths from `config.ini`, builds the argument list (incl. `JOBNAME`), runs `BNS_all.py`, then `make_movies.sh`. |
 | `BNS_3d.sh` | 3-D driver: renders `bns.prim3D` snapshots as PyVista isosurfaces + Matplotlib orthoslices, then makes movies. Uses `plot_3d_data/`. |
-| `plot_3d_data/` | 3-D rendering package (data loader, style/derived-field helpers, isosurface & orthoslice scripts). See its own `README.md`. |
+| `BNS_grid.sh` | 2-D comparison driver: one figure of many slice panels — models × diagnostics, or one model over time. Uses `plot_2d_grid/`. |
+| `plot_2d_grid/` | 2-D panel-grid package (diagnostic registry, frame selection, layout engine with shared colorbars). See its own `README.md`. |
+| `plot_3d_data/` | 3-D rendering package (data loader, style/derived-field helpers, isosurface, volume & orthoslice scripts). See its own `README.md`. |
 | `BNS_compare.py` / `BNS_compare.sh` | Side-by-side comparison of two runs: `[run A] [run B] [ratio A/B]` slice panels for opacity/radiation (and other) fields. |
 | `make_movies.sh` | Builds one MP4/GIF per frame subfolder (`Figs/<name>_xy/`) into `Figs/all_movies/`. |
 | `athenak_units.py` | Unit conversions (code / CGS / NGS) and per-quantity plot parameters. |
@@ -91,6 +93,37 @@ python3 BNS_all.py --simpath /path/to/run \
 
 Run `python3 BNS_all.py --help` for the full list of sections and flags.
 
+### 2-D comparison grids
+
+```bash
+bash BNS_grid.sh
+```
+
+Builds **one** figure holding many 2-D slice panels, so several models and
+diagnostics can be compared side by side instead of flipping between PNGs.
+`ROWS` and `COLS` each take one of `model`, `diagnostic` or `time`, and whatever
+is left over is swept into one figure per value — which covers models ×
+diagnostics, one model over time, and one diagnostic across models, with a
+single mechanism.
+
+Sample with `TIMES=(4000)` to compare runs at the same physical time (each
+model uses its nearest frame, and the resolved frame is printed per model), or
+`FRAMES=(1000)` to pick by index — index N is exact but run-relative, so runs
+with different output cadences land at different times.
+
+Colour scales are fixed per diagnostic (from `athenak_units.plot_params`,
+overridable via `CLIM[density]="1e10,1e15"`), so every panel of a diagnostic is
+directly comparable and one shared colorbar is correct. `COLORBAR=auto` places
+it where the geometry allows: under each column when `COLS=diagnostic`, right of
+each row when `ROWS=diagnostic`, once for the figure otherwise. `SHAREX`/`SHAREY` (on by default) drop both the
+axis label and the tick labels on interior panels, so the bottom row and left
+column carry them — one x label per column, not one caption for the figure.
+Panel geometry is explicit rather than `constrained_layout`, so `PANEL_SIZE` and
+`SPACING` (gap as a fraction of panel size) are exact, and each colorbar is
+built from its panels' positions so it spans them precisely. `GRID=false`
+disables the faint axis grid lines. `DRY_RUN=true bash BNS_grid.sh` prints the
+command without rendering.
+
 ### 3-D isosurfaces & orthoslices
 
 ```bash
@@ -98,13 +131,48 @@ bash BNS_3d.sh
 ```
 
 Finds every `bns.prim3D.*.bin` under `<simpath>/output-*/`, renders the `PLOTS`
-(`orthoslice`, `isosurface`) for each `SCALARS` entry (`log_dens`, `temperature`,
+(`orthoslice`, `isosurface`, `isosurface_colorT`, `isosurface_colorYe`,
+`volume`) for each `SCALARS` entry (`log_dens`, `temperature`,
 `log_bmag`, and optionally `current`, `vorticity`, `qcriterion`), writes PNGs to
 `<simpath>/Figs_3d/`, and stitches movies. Edit `SCALARS`, `STREAMLINES`
 (`"B"`/`"velocity"` field lines on isosurfaces), `STRIDE`, `JOBS`, `UNITS`,
 `RESOLUTION`/`CROP`, and the per-scalar `ISO_LEVELS`/`ISO_CLIM` at the top of the
 script. Parallelism uses `xargs -P` (no GNU `parallel` needed) and movies use the
 `imageio-ffmpeg` binary if no system `ffmpeg` is present.
+
+Run `DRY_RUN=true bash BNS_3d.sh` to print the render commands without spending
+node time on them.
+
+For smooth hydrodynamic fields (`rho`, temperature, and `Y_e`), the driver uses
+linear AMR reconstruction, 320 cells across the longest crop axis, SSAA, smooth
+surface normals, and volume-preserving Taubin contour smoothing. Set
+`INTERPOLATION=nearest` and `SMOOTH_ITERATIONS=0` when exact native cell edges
+are more important than presentation. The 320^3 preset is substantially more
+memory-intensive than 256^3, so the default `JOBS` is limited to 4.
+
+**Composition and volume modes.** `isosurface_colorYe` paints Y_e on
+`log10(rho) = 11, 13` density surfaces (`YE_LEVELS`/`YE_CLIM`/`YE_CMAP`), and
+`volume` renders density as a volume (`VOL_*`). The split is deliberate: a
+volume rendering cannot show composition once the ejecta is optically thick,
+since every ray then exits through tens of M of `Y_e ~ 0.4` outflow and the
+frame saturates. Density survives volume rendering only because its colour ramp
+paints tenuous material dark. Y_e is read from `ye` or from the `s_00` passive
+scalar, whichever the snapshot carries.
+
+Volume frames are the memory-heavy ones (a 480³ float32 field is ~422 MiB before
+VTK's own copy), so `BNS_3d.sh` caps their concurrency at `VOL_MAX_JOBS`
+independently of `JOBS`.
+
+**Merger-relative timing and annotations.** Set `T0` to the merger time in code
+units and every frame is labelled `t_merger +X.XXX ms`. `FONT` picks the
+annotation typeface (`sans`, `serif`, `cm`, or VTK's `arial`/`times`/`courier`),
+and `ANNOTATE=mathtext` (the default) composites the clock, colour bar and ruler
+with Matplotlib so the maths is typeset properly — VTK's own text cannot set
+`log₁₀ρ` or `Y_e` and would print `log10 rho [g cm^-3]` instead. `SCALEBAR="auto"`
+adds a self-relabelling 1/2/5 ruler, `AXES=true` an orientation triad, and
+`CAMERA_TRACK` interpolates a zoom across the sequence. The ruler is exact
+because it forces an orthographic camera, where `PARALLEL_SCALE` is literally
+the half-height of the view in code units.
 
 The `ISO_LEVELS`/`ISO_CLIM` defaults assume `UNITS=cgs` (|B| in Gauss, ρ in
 g cm⁻³); switch the commented code-unit ranges if you set `UNITS=code`. The
@@ -168,7 +236,7 @@ gravitational waveform.
 | File | Purpose |
 |------|---------|
 | `run_analysis.sh` | Orchestrator: reads paths from `../config.ini`, then runs the merger-time, ejecta, neutrino, plotting, and accretion steps. |
-| `merger_time.py` | Merger time from the max of \|psi4₂₂\|² (real²+imag²) of the (2,2) GW mode, merged across all `output-*/waveforms`. Writes `merger_time.txt`. |
+| `merger_time.py` | Merger time = peak of the (2,2) strain amplitude \|h₂₂\|, with h obtained from psi4₂₂ by fixed-frequency integration, merged across all `output-*/waveforms`. A restart that stops before merger falls back to its restart parent's waveform (`output-0000/parent`); `t_merger` in config.ini overrides. Writes `merger_time.txt`. |
 | `analyze_ejecta.py` | Per-snapshot ejecta diagnostics (mass-ejection rate, vinf, Yₑ, angular distributions, and the 2-D Yₑ–θ composition map). Needs the EOS table. |
 | `analyze_neutrinos.py` | Neutrino energy luminosity, mean energy, and angular distribution from `rad_m1_E/F/N`. |
 | `analyze_accretion.py` | Post-merger accretion rate from baryon bookkeeping (`Ṁ_accr = −dM_b/dt + Ṁ_ej(t−r/⟨v⟩)`), reusing the `.hst` files + ejecta outputs. Writes `fig_accretion.png` / `Mdot_accr_*.txt`. |

@@ -101,6 +101,21 @@ CODE2CGS_ED_DOT   = UNIT_ED_DOT * MeV * _NGS_numden
 _unit_len_cgs     = G * Msun / c**2            # ≈ 1.477e6 cm
 CODE2CGS_DENS     = Msun / _unit_len_cgs**3    # ≈ 6.178e17
 
+# Baryon number density: code rest-mass density → fm^-3, n_b = rho / m_b.
+# AthenaK's CompOSE EOS uses the table's neutron mass "mn" as m_b
+# (eos_compose.cpp); 939.565 MeV for both DD2 and SFHo.
+M_B_MEV           = 939.565346
+_m_b_g            = M_B_MEV * MeV / c**2       # ≈ 1.675e-24 g
+CODE2FM3_NB       = CODE2CGS_DENS / _m_b_g / _NUC_volume
+
+# Neutrino degeneracy parameter y = n (n/J)^3 / (4 pi/(hc)^3), the quantity
+# bns_nurates' CalculateThickParamsFromM1 maps to eta (distribution.hpp).
+# Dimensionless; with n [fm^-3] and J [MeV fm^-3] (the m1ff output) divide by
+# 4 pi/(hc)^3 in fm.  Constants as in bns_nurates constants.hpp.
+HC_MEV_FM         = 4.135667696e-21 * 2.99792458e23   # h*c ≈ 1239.84 MeV fm
+FOURPI_HC3_FM     = 4.0 * math.pi / HC_MEV_FM**3      # [MeV^-3 fm^-3]
+NU_Y_FD_MAX       = 64.0 / 81.0   # y3: Fermi-Dirac limit (eta -> inf); fallback above
+
 # Average neutrino energy E/N: code ratio (km^-2)/(fm^-3) → MeV
 CODE2MEV_AVGENE   = GK2NGS_ENEDENS / CODE2NGS_NUMDENS  # ≈ 7.556e5
 
@@ -223,7 +238,9 @@ _CODE_VMIN = {
     'con_H':     1e-9,
     'avg_energy':1e-4,
     'nu_energy': 30.0 / CODE2MEV_AVGENE,
-    'bmag':      1e-10,
+    'bmag':      1e12   / CODE2CGS_BFIELD,  # ≈ 1.2e-8
+    'Y_nu':      1e-5,
+    'nu_y':      0.0,
 }
 _CODE_VMAX = {
     'dens':      2e15   / CODE2CGS_DENS,   # ≈ 3.2e-3
@@ -237,7 +254,9 @@ _CODE_VMAX = {
     'con_H':     1e-4,
     'avg_energy':1e-3,
     'nu_energy': 150.0 / CODE2MEV_AVGENE,
-    'bmag':      1e-5,
+    'bmag':      1e15   / CODE2CGS_BFIELD,  # ≈ 1.2e-5
+    'Y_nu':      1.0,
+    'nu_y':      0.8,   # just above the fallback y3 = 64/81 ~ 0.790
 }
 
 # Scale factors: (var, units) → multiplicative factor applied to code values
@@ -318,6 +337,8 @@ _LABELS = {
     ('s_00',      'code'): r"$Y_e$",
     ('s_00',      'ngs' ): r"$Y_e$",
     ('s_00',      'cgs' ): r"$Y_e$",
+    ('Y_nu',      'code'): r"$Y_\nu$",
+    ('nu_y',      'code'): r"$y_\nu$",
     ('con_H',     'code'): r"$|\mathcal{H}|$",
     ('con_H',     'ngs' ): r"$|\mathcal{H}|$",
     ('con_H',     'cgs' ): r"$|\mathcal{H}|$",
@@ -328,7 +349,7 @@ _LABELS = {
 }
 
 # Variables that use a linear (not log) colorscale
-_LINEAR_VARS = {'temperature', 's_00', 'nu_energy'}
+_LINEAR_VARS = {'temperature', 's_00', 'nu_energy', 'nu_y'}
 
 
 def plot_params(var, units='code'):

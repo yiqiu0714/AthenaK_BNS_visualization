@@ -34,13 +34,13 @@ MODELS=(
     "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/VVLR_eq/analysis|eq (w/o number NEPS)"
 )
 
-# MODELS=(
-#     "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/VVLR_test_15/analysis|eq (w/ NEPS)"
-#     "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/archive_20260625_235523/VVLR_eq_number/analysis|non-eq (w/ NEPS)"
-# )
+MODELS=(
+    "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/VVLR_test_dm/analysis|fixed_dm"
+    "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/VVLR_eq/analysis|baseline"
+)
 
 # Output figure filename.
-OUT="fig_neutrino_comparison_noneps.png"
+OUT="fig_neutrino_comparison_dm.png"
 
 # Where to write the figure (empty = <first analysis dir>/comparison_plot/).
 OUTDIR=""
