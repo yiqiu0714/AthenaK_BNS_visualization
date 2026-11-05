@@ -3,8 +3,10 @@ Plot ejecta and neutrino diagnostics produced by analyze_ejecta.py and
 analyze_neutrinos.py.
 
 Reads the .txt outputs from --output-dir and writes:
-    fig_ejecta.pdf    (2x3 panel summary of the ejecta properties)
-    fig_neutrino.pdf  (2 panels: neutrino luminosity + mean energy)
+    fig_ejecta.pdf          (1x4 mass distributions: v_inf, T, Y_e, entropy)
+    fig_ejecta_time.pdf     (2x3 ejecta time evolution and distribution summary)
+    fig_ejecta_ye_theta.pdf (2-D Y_e vs theta composition map)
+    fig_neutrino.pdf        (2 panels: neutrino luminosity + mean energy)
 """
 
 import argparse
@@ -51,7 +53,61 @@ def _fmt_mass(m):
     return f'{m:.2e}'.replace('e-0', 'e-').replace('e+0', 'e')
 
 
-def plot_ejecta(adir, t_merger, radius):
+def plot_ejecta(adir, t_ms, radius):
+    """Ejecta mass distributions vs v_inf, temperature, Y_e, and entropy.
+
+    One row of four panels; the y-axis is ejected mass per bin [M_sun] on a log
+    scale fixed to 1e-6 .. 1e-2, with the geodesic and Bernoulli criteria
+    overlaid.
+    """
+    def load(f): return np.loadtxt(os.path.join(adir, f))
+
+    # (geo file, Ber file, x-label, fixed xlim or None -> auto to populated bins,
+    #  panel title, optional vertical guide line)
+    panels = [
+        ('Mej_vinf_geo.txt', 'Mej_vinf_Ber.txt',
+         r'$v_\infty$ [$c$]', (0, 0.8), 'Velocity', None),
+        ('Mej_T_geo.txt', 'Mej_T_Ber.txt',
+         r'$T$ [MeV]', None, 'Temperature', None),
+        ('Mej_Ye_geo.txt', 'Mej_Ye_Ber.txt',
+         r'$Y_e$', (0, 0.6), r'$Y_e$', 0.5),
+        ('Mej_s_geo.txt', 'Mej_s_Ber.txt',
+         r'$s$ [$k_B\,\mathrm{baryon}^{-1}$]', None, 'Entropy', None),
+    ]
+
+    fig, axes = plot_style.subplots(1, 4, panel_w=4.2, panel_h=4.0)
+    fig.suptitle(f'BNS SPH — Ejecta mass distributions  (r = {radius:g} M$_\\odot$)',
+                 fontsize=13)
+
+    for ax, (fgeo, fber, xlabel, xlim, title, vline) in zip(axes, panels):
+        geo = load(fgeo); ber = load(fber)
+        ax.step(geo[:, 0], geo[:, 1], color='tab:blue', where='mid',
+                lw=1.2, label='geodesic')
+        ax.step(ber[:, 0], ber[:, 1], color='tab:orange', ls='--', where='mid',
+                lw=1.2, label='Bernoulli')
+        if vline is not None:
+            ax.axvline(vline, color='gray', ls=':', lw=0.8)
+        ax.set_yscale('log')
+        ax.set_ylim(1e-6, 1e-2)
+        ax.set_xlabel(xlabel)
+        ax.set_title(title)
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+        else:
+            # auto-focus on the populated bins (both criteria)
+            nz = np.where((geo[:, 1] > 0) | (ber[:, 1] > 0))[0]
+            ax.set_xlim(0, geo[nz[-1], 0] * 1.1 if len(nz) else geo[-1, 0])
+
+    axes[0].set_ylabel(r'$M_\mathrm{ej}$ per bin  [$M_\odot$]')
+    axes[0].legend(fontsize=9)
+
+    fig.tight_layout()
+    out = os.path.join(adir, 'fig_ejecta.pdf')
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    print(f'Saved {out}')
+
+
+def plot_ejecta_time(adir, t_merger, radius):
     """2x3 ejecta summary. Masses in M_sun; times relative to the merger."""
     def load(f): return np.loadtxt(os.path.join(adir, f))
     def t_rel(t): return (t - t_merger) * MSUN_TO_MS
@@ -67,7 +123,6 @@ def plot_ejecta(adir, t_merger, radius):
     Ye_avg_Ber   = load('Ye_avg_Ber.txt')
     Mej_Ye_geo   = load('Mej_Ye_geo.txt')
     Mej_Ye_Ber   = load('Mej_Ye_Ber.txt')
-
     t_geo_cum, Mej_geo_cum = cumulative(Mej_rate_geo)
     t_Ber_cum, Mej_Ber_cum = cumulative(Mej_rate_Ber)
     lab_geo = f'geodesic ({_fmt_mass(Mej_geo_cum[-1])} $M_\\odot$)'
@@ -145,7 +200,7 @@ def plot_ejecta(adir, t_merger, radius):
     ax.set_xlim(0, 0.6); ax.legend(fontsize=9); ax.set_title(r'$Y_e$ distribution')
 
     fig.tight_layout()
-    out = os.path.join(adir, 'fig_ejecta.pdf')
+    out = os.path.join(adir, 'fig_ejecta_time.pdf')
     fig.savefig(out, dpi=150, bbox_inches='tight')
     print(f'Saved {out}')
 
@@ -257,7 +312,8 @@ def main():
         t_merger_ms = t_merger * MSUN_TO_MS
 
     if not args.no_ejecta:
-        plot_ejecta(adir, t_merger, args.ej_radius)
+        plot_ejecta(adir, t_ms, args.ej_radius)
+        plot_ejecta_time(adir, t_merger, args.ej_radius)
         plot_ye_theta(adir, args.ej_radius)
     if not args.no_neutrino:
         plot_neutrino(adir, t_ms, t_merger_ms, nu_xlabel, nu_xlim, args.radius)

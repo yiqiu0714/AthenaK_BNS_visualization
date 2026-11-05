@@ -39,6 +39,10 @@ MODELS=(
     "/lus/flare/projects/CompactBinaryMerger/yiqiu/Large_sim/bundle_run/VVLR_eq/analysis|baseline"
 )
 
+# Alternate Perlmutter comparison (or supply these DIR/LABEL pairs on the CLI):
+# "/pscratch/sd/y/yiqiu/TOV_test_athenaK/lorene_bns/DD2_m1_nn_opacity/VVLR/analysis|Baseline"
+# "/pscratch/sd/y/yiqiu/TOV_test_athenaK/lorene_bns/DD2_m1_nn_opacity/VVLR_nn_new/analysis|NN"
+
 # Output figure filename.
 OUT="fig_neutrino_comparison_dm.png"
 
@@ -74,7 +78,9 @@ if ! command -v module &>/dev/null; then
     done
 fi
 if command -v module &>/dev/null; then
-    module load python py-numpy py-matplotlib
+    # NERSC's python module is conda-based and already bundles numpy/matplotlib;
+    # there are no separate py-numpy / py-matplotlib modules here.
+    module load python
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────

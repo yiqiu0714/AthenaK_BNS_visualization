@@ -119,6 +119,21 @@ NU_Y_FD_MAX       = 64.0 / 81.0   # y3: Fermi-Dirac limit (eta -> inf); fallback
 # Average neutrino energy E/N: code ratio (km^-2)/(fm^-3) → MeV
 CODE2MEV_AVGENE   = GK2NGS_ENEDENS / CODE2NGS_NUMDENS  # ≈ 7.556e5
 
+# Fluid-frame moments rad_J / rad_n are written in NUCLEAR units (MeV/fm^3 and
+# fm^-3), not code units -- J is rescaled by ene_conv on output so that
+# <e>=J/n is already in MeV (see derived_variables.cpp ~L1261-1269).  So the
+# fluid energy density converts to ngs/cgs by the fm^3 volume factor only,
+# NOT by GK2NGS_ENEDENS (which is for the code-unit lab E).
+NUC2NGS_ENEDENS   = 1e18          # MeV/fm^3 → MeV/nm^3   (1 fm^3 = 1e-18 nm^3)
+NUC2CGS_ENEDENS   = MeV * 1e39    # MeV/fm^3 → erg/cm^3   (≈ 1.602e33)
+
+# Baryon number density: rest-mass density ρ (code) → n_b = ρ/m_b [fm^-3].
+# m_b = 939.56535 MeV is the baryon (neutron) mass read from DD2.athtab
+# (table_scalars "mn"); this matches the sim's own nb = rho/GetBaryonMass().
+_MB_MEV     = 939.56535
+_mb_gram    = _MB_MEV * MeV / c**2               # MeV/c^2 → g  (≈ 1.675e-24)
+CODE2NB_FM3 = CODE2CGS_DENS / _mb_gram * 1e-39   # code ρ → baryon fm^-3  (≈ 369)
+
 # Magnetic field: code → Gauss.
 # AthenaK GRMHD uses the geometrized Gaussian (magnetic pressure = b^2/2)
 # convention in the same G=c=M_sun=1 system as the rest-mass density, so the
@@ -231,6 +246,8 @@ _CODE_VMIN = {
     'E:0':       1e-11,
     'N:0':       1e-7,
     'N:2':       1e-7,
+    'J:0':       1e-9,    # fluid-frame energy density (rad_J) [MeV/fm^3]
+    'n:0':       1e-10,   # fluid-frame number density  (rad_n) [fm^-3]
     'abs_0:0':   1e-18,
     'abs_1:0':   1e-18,
     'eta_0:0':   1e-10,
@@ -240,13 +257,26 @@ _CODE_VMIN = {
     'nu_energy': 30.0 / CODE2MEV_AVGENE,
     'bmag':      1e12   / CODE2CGS_BFIELD,  # ≈ 1.2e-8
     'Y_nu':      1e-5,
-    'nu_y':      0.0,
+    # bns_nurates thick-distribution reconstruction (already in target units;
+    # conversion is baked into the derived function, so scale = 1 for these).
+    'nu_y':      0.0,     # dimensionless; FD ceiling 64/81=0.79, overshoot shown
+    'nu_eta_t':  -20.0,   # degeneracy mu/T, UNCAPPED (sim clamps at 20)
+    'nu_temp_t': 0.0,     # spectral temperature [MeV]
+    'nu_avge':   0.0,     # fluid-frame mean energy J/n [MeV]
+    'nu_Ynu':    0.0,     # neutrino fraction per baryon n_nu/n_b (linear, like Y_e)
+    # heavy-lepton (nux) variants (species 2, 0.5 mu+tau weighting)
+    'nux_y':     0.0,     # ceiling 0.5*64/81 = 0.395
+    'nux_eta_t': -20.0,
+    'nux_temp_t':0.0,
+    'nux_avge':  0.0,
 }
 _CODE_VMAX = {
     'dens':      2e15   / CODE2CGS_DENS,   # ≈ 3.2e-3
     'E:0':       1e-8,
     'N:0':       1e-3,
     'N:2':       1e-3,
+    'J:0':       1e0,     # [MeV/fm^3]
+    'n:0':       1e-3,    # [fm^-3]
     'abs_0:0':   1e-9,
     'abs_1:0':   1e-9,
     'eta_0:0':   1e-4,
@@ -257,6 +287,14 @@ _CODE_VMAX = {
     'bmag':      1e15   / CODE2CGS_BFIELD,  # ≈ 1.2e-5
     'Y_nu':      1.0,
     'nu_y':      0.8,   # just above the fallback y3 = 64/81 ~ 0.790
+    'nu_eta_t':  50.0,    # wider than the sim's 20 clamp to reveal true degeneracy
+    'nu_temp_t': 60.0,    # [MeV], matches the matter-temperature colour scale
+    'nu_avge':   50.0,    # [MeV]
+    'nu_Ynu':    0.1,     # neutrino fraction per baryon (Y_e uses 0-0.5)
+    'nux_y':     0.75,    # ~half the nue range (nux ceiling is halved)
+    'nux_eta_t': 50.0,
+    'nux_temp_t':60.0,
+    'nux_avge':  50.0,
 }
 
 # Scale factors: (var, units) → multiplicative factor applied to code values
@@ -271,6 +309,11 @@ _SCALES = {
     ('N:0',      'cgs'): CODE2CGS_NUMDENS,
     ('N:2',      'ngs'): CODE2NGS_NUMDENS,
     ('N:2',      'cgs'): CODE2CGS_NUMDENS,
+    # fluid-frame radiation moments -- J in MeV/fm^3 (nuclear), n in fm^-3
+    ('J:0',      'ngs'): NUC2NGS_ENEDENS,
+    ('J:0',      'cgs'): NUC2CGS_ENEDENS,
+    ('n:0',      'ngs'): CODE2NGS_NUMDENS,
+    ('n:0',      'cgs'): CODE2CGS_NUMDENS,
     # absorption opacities
     ('abs_0:0',  'ngs'): CODE2NGS_OPACITY,
     ('abs_0:0',  'cgs'): CODE2CGS_OPACITY,
@@ -308,6 +351,13 @@ _LABELS = {
     ('N:2',      'code'): r"$N_\nu^{(2)}~[\mathrm{fm}^{-3}]$",
     ('N:2',      'ngs' ): r"$N_\nu^{(2)}~[\mathrm{nm^{-3}}]$",
     ('N:2',      'cgs' ): r"$N_\nu^{(2)}~[\mathrm{cm^{-3}}]$",
+    # fluid-frame radiation moments (comoving J, n); J native = MeV/fm^3
+    ('J:0',      'code'): r"$J_\nu^{(0)}~[\mathrm{MeV\,fm^{-3}}]$",
+    ('J:0',      'ngs' ): r"$J_\nu^{(0)}~[\mathrm{MeV\,nm^{-3}}]$",
+    ('J:0',      'cgs' ): r"$J_\nu^{(0)}~[\mathrm{erg\,cm^{-3}}]$",
+    ('n:0',      'code'): r"$n_\nu^{(0)}~[\mathrm{fm}^{-3}]$",
+    ('n:0',      'ngs' ): r"$n_\nu^{(0)}~[\mathrm{nm^{-3}}]$",
+    ('n:0',      'cgs' ): r"$n_\nu^{(0)}~[\mathrm{cm^{-3}}]$",
     # absorption opacities
     ('abs_0:0',  'code'): r"$\kappa_{a,0}^{(0)}~[\mathrm{km}^{-1}]$",
     ('abs_0:0',  'ngs' ): r"$\kappa_{a,0}^{(0)}~[\mathrm{nm}^{-1}]$",
@@ -346,10 +396,43 @@ _LABELS = {
     ('bmag',      'code'): r"$|B|~[\mathrm{code}]$",
     ('bmag',      'ngs' ): r"$|B|~[\mathrm{G}]$",
     ('bmag',      'cgs' ): r"$|B|~[\mathrm{G}]$",
+    # bns_nurates thick-distribution reconstruction (n, J -> y, eta_t, temp_t)
+    ('nu_y',      'code'): r"$y = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nu_y',      'ngs' ): r"$y = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nu_y',      'cgs' ): r"$y = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nu_eta_t',  'code'): r"$\eta_t = \mu/T$ (reconstructed)",
+    ('nu_eta_t',  'ngs' ): r"$\eta_t = \mu/T$ (reconstructed)",
+    ('nu_eta_t',  'cgs' ): r"$\eta_t = \mu/T$ (reconstructed)",
+    ('nu_temp_t', 'code'): r"$T_\nu~[\mathrm{MeV}]$ (reconstructed)",
+    ('nu_temp_t', 'ngs' ): r"$T_\nu~[\mathrm{MeV}]$ (reconstructed)",
+    ('nu_temp_t', 'cgs' ): r"$T_\nu~[\mathrm{MeV}]$ (reconstructed)",
+    # fluid-frame mean neutrino energy <e> = J/n
+    ('nu_avge',   'code'): r"$\langle\varepsilon_\nu\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
+    ('nu_avge',   'ngs' ): r"$\langle\varepsilon_\nu\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
+    ('nu_avge',   'cgs' ): r"$\langle\varepsilon_\nu\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
+    # neutrino number fraction per baryon Y_nu = n_nu / n_b
+    ('nu_Ynu',    'code'): r"$Y_\nu = n_\nu/n_b$",
+    ('nu_Ynu',    'ngs' ): r"$Y_\nu = n_\nu/n_b$",
+    ('nu_Ynu',    'cgs' ): r"$Y_\nu = n_\nu/n_b$",
+    # heavy-lepton (nux) reconstruction variants
+    ('nux_y',     'code'): r"$y_{\nu_x} = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nux_y',     'ngs' ): r"$y_{\nu_x} = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nux_y',     'cgs' ): r"$y_{\nu_x} = n^4/J^3/(4\pi/(hc)^3)$",
+    ('nux_eta_t', 'code'): r"$\eta_{t,\nu_x} = \mu/T$ (reconstructed)",
+    ('nux_eta_t', 'ngs' ): r"$\eta_{t,\nu_x} = \mu/T$ (reconstructed)",
+    ('nux_eta_t', 'cgs' ): r"$\eta_{t,\nu_x} = \mu/T$ (reconstructed)",
+    ('nux_temp_t','code'): r"$T_{\nu_x}~[\mathrm{MeV}]$ (reconstructed)",
+    ('nux_temp_t','ngs' ): r"$T_{\nu_x}~[\mathrm{MeV}]$ (reconstructed)",
+    ('nux_temp_t','cgs' ): r"$T_{\nu_x}~[\mathrm{MeV}]$ (reconstructed)",
+    ('nux_avge',  'code'): r"$\langle\varepsilon_{\nu_x}\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
+    ('nux_avge',  'ngs' ): r"$\langle\varepsilon_{\nu_x}\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
+    ('nux_avge',  'cgs' ): r"$\langle\varepsilon_{\nu_x}\rangle_\mathrm{fl}~[\mathrm{MeV}]$",
 }
 
 # Variables that use a linear (not log) colorscale
-_LINEAR_VARS = {'temperature', 's_00', 'nu_energy', 'nu_y'}
+_LINEAR_VARS = {'temperature', 's_00', 'nu_energy',
+                'nu_y', 'nu_eta_t', 'nu_temp_t', 'nu_avge', 'nu_Ynu',
+                'nux_y', 'nux_eta_t', 'nux_temp_t', 'nux_avge'}
 
 
 def plot_params(var, units='code'):

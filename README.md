@@ -237,10 +237,10 @@ gravitational waveform.
 |------|---------|
 | `run_analysis.sh` | Orchestrator: reads paths from `../config.ini`, then runs the merger-time, ejecta, neutrino, plotting, and accretion steps. |
 | `merger_time.py` | Merger time = peak of the (2,2) strain amplitude \|h₂₂\|, with h obtained from psi4₂₂ by fixed-frequency integration, merged across all `output-*/waveforms`. A restart that stops before merger falls back to its restart parent's waveform (`output-0000/parent`); `t_merger` in config.ini overrides. Writes `merger_time.txt`. |
-| `analyze_ejecta.py` | Per-snapshot ejecta diagnostics (mass-ejection rate, vinf, Yₑ, angular distributions, and the 2-D Yₑ–θ composition map). Needs the EOS table. |
+| `analyze_ejecta.py` | Per-snapshot ejecta diagnostics: mass-ejection rate, and mass distributions vs v∞, temperature, Yₑ, entropy-per-baryon (from EOS Q2), θ, plus the 2-D Yₑ–θ composition map. Needs the EOS table. |
 | `analyze_neutrinos.py` | Neutrino energy luminosity, mean energy, and angular distribution from `rad_m1_E/F/N`. |
 | `analyze_accretion.py` | Post-merger accretion rate from baryon bookkeeping (`Ṁ_accr = −dM_b/dt + Ṁ_ej(t−r/⟨v⟩)`), reusing the `.hst` files + ejecta outputs. Writes `fig_accretion.png` / `Mdot_accr_*.txt`. |
-| `plot_analysis.py` | Builds `fig_ejecta.pdf` (2×3), `fig_ejecta_ye_theta.pdf` (Yₑ vs θ), and `fig_neutrino.pdf` (2 panels: log luminosity 1e51–3e54, linear mean energy 0–60). |
+| `plot_analysis.py` | Builds `fig_ejecta.pdf` (1×4 mass distributions vs v∞/T/Yₑ/entropy, log Mₑⱼ 1e-6–1e-2 M⊙), `fig_ejecta_time.pdf` (2×3 summary: rate, cumulative mass, instantaneous/cumulative ⟨Yₑ⟩, velocity, angle, and composition), `fig_ejecta_ye_theta.pdf` (Yₑ vs θ), and `fig_neutrino.pdf` (log luminosity 1e51–3e54, mean energy 0–60). |
 | `utils_ejecta.py` | Shared spherical-integration helpers. |
 
 ```bash
